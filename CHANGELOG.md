@@ -1,15 +1,20 @@
 # Changelog
 
+## v0.2.5 (2025-10-15)
+
+### New Features
+- TLS 证书申请新增 Nginx webroot 验证方式
+- 支持 Let's Encrypt / Buypass / ZeroSSL 多 CA 选择
+
 ## v0.2.4 (2025-10-05)
 
 ### Improvements
 - 证书申请完成后显示证书路径
-- 优化 TLS 证书管理流程
 
 ## v0.2.3 (2025-09-28)
 
 ### New Features
-- 协议安装模式追踪，支持自动推断已安装协议类型
+- 协议安装模式追踪
 
 ## v0.2.2 (2025-09-20)
 
