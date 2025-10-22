@@ -1,10 +1,15 @@
 # Changelog
 
+## v0.2.6 (2025-10-22)
+
+### Improvements
+- TLS 菜单添加证书有效期显示
+- 优化证书状态检查逻辑
+
 ## v0.2.5 (2025-10-15)
 
 ### New Features
 - TLS 证书申请新增 Nginx webroot 验证方式
-- 支持 Let's Encrypt / Buypass / ZeroSSL 多 CA 选择
 
 ## v0.2.4 (2025-10-05)
 
