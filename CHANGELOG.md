@@ -1,10 +1,15 @@
 # Changelog
 
+## v0.3.0 (2025-11-15)
+
+### Improvements
+- 重构安装菜单协议分类，按核心类型（Xray/sing-box）分组
+- 优化协议选择交互流程
+
 ## v0.2.7 (2025-11-01)
 
 ### Bug Fixes
-- 修复安装核心时未自动创建 systemd service 导致服务无法启动
-- 修复 service 文件路径错误
+- 修复安装核心时未自动创建 systemd service
 
 ## v0.2.6 (2025-10-22)
 
