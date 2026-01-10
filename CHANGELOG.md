@@ -1,10 +1,21 @@
 # Changelog
 
+## v1.0.0 (2026-01-10)
+
+### Bug Fixes
+- 修复 Alpine OpenRC 兼容性问题
+- 修复菜单卸载选项未清理 systemd service
+- 修复 CentOS/RHEL 依赖安装失败
+
+### New Features
+- 正式支持 Alpine Linux（OpenRC）
+- 新增完整卸载功能（含 Xray/sing-box/BBR 配置清理）
+- 新增 BBR 加速管理（32 项功能）
+
 ## v0.3.2 (2025-12-05)
 
 ### Bug Fixes
 - 修复旧版本已安装协议无法自动推断安装模式
-- 修复升级后配置迁移兼容性问题
 
 ## v0.3.1 (2025-11-25)
 
