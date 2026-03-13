@@ -111,6 +111,20 @@ download_binary() {
 
 # --- systemd 服务 ---
 setup_service() {
+    # Alpine 使用 OpenRC，不支持 systemd
+    if [[ "${OS_TYPE}" == "alpine" ]]; then
+        yellow "Alpine 系统检测到，跳过 systemd 配置"
+        yellow "请手动配置 OpenRC 服务或直接运行: /usr/local/bin/VasmaX -c /etc/vasmax/config.yaml"
+
+        # 仍然安装 vasmax 命令别名
+        cat > /usr/local/bin/vasmax << 'ALIAS'
+#!/usr/bin/env bash
+/usr/local/bin/VasmaX --menu "$@"
+ALIAS
+        chmod 755 /usr/local/bin/vasmax
+        return
+    fi
+
     echo "配置 systemd 服务..."
     cat > "${SERVICE_FILE}" << 'EOF'
 [Unit]
@@ -276,8 +290,13 @@ install_nginx() {
             ;;
     esac
 
-    systemctl enable nginx
-    systemctl start nginx
+    if [[ "${OS_TYPE}" == "alpine" ]]; then
+        rc-update add nginx default 2>/dev/null || true
+        rc-service nginx start 2>/dev/null || true
+    else
+        systemctl enable nginx
+        systemctl start nginx
+    fi
     green "Nginx 已安装并启动"
 }
 
@@ -330,7 +349,14 @@ show_menu() {
     case "${choice}" in
         1) do_install ;;
         2) do_update ;;
-        3) uninstall "${2:-}" ;;
+        3)
+            echo "1) 保留配置卸载  2) 完全清除（含配置和数据）"
+            read -rp "选择 [1-2]: " uninstall_choice
+            case "${uninstall_choice}" in
+                2) uninstall "--purge" ;;
+                *) uninstall ;;
+            esac
+            ;;
         4) systemctl start VasmaX && green "已启�? ;;
         5) systemctl stop VasmaX && green "已停�? ;;
         6) systemctl restart VasmaX && green "已重�? ;;
@@ -371,15 +397,21 @@ do_install() {
     init_dirs
     download_binary
     setup_service
-    systemctl start VasmaX
-    green "安装完成！运�?vasmax 打开管理菜单"
+    if [[ "${OS_TYPE}" != "alpine" ]]; then
+        systemctl start VasmaX
+    fi
+    green "安装完成！运行 vasmax 打开管理菜单"
 }
 
 do_update() {
     detect_os
-    systemctl stop VasmaX 2>/dev/null || true
+    if [[ "${OS_TYPE}" != "alpine" ]]; then
+        systemctl stop VasmaX 2>/dev/null || true
+    fi
     download_binary
-    systemctl start VasmaX
+    if [[ "${OS_TYPE}" != "alpine" ]]; then
+        systemctl start VasmaX
+    fi
     green "更新完成"
 }
 
