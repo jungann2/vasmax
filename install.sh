@@ -118,7 +118,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vasmax -c /etc/vasmax/config.yaml
+ExecStart=/usr/local/bin/VasmaX -c /etc/vasmax/config.yaml
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
@@ -130,14 +130,12 @@ EOF
     systemctl daemon-reload
     systemctl enable VasmaX
 
-    # 安装 vasmax 命令别名
-    if [[ ! -f /usr/local/bin/vasmax ]]; then
-        cat > /usr/local/bin/vasmax << 'ALIAS'
+    # 安装 vasmax 命令别名（小写命令指向大写二进制）
+    cat > /usr/local/bin/vasmax << 'ALIAS'
 #!/usr/bin/env bash
-/usr/local/bin/vasmax --menu "$@"
+/usr/local/bin/VasmaX --menu "$@"
 ALIAS
-        chmod 755 /usr/local/bin/vasmax
-    fi
+    chmod 755 /usr/local/bin/vasmax
 
     green "systemd 服务已配�?
 }

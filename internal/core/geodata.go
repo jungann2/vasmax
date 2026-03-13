@@ -66,6 +66,6 @@ func (m *Manager) UpdateGeoData(ctx context.Context) error {
 
 // InstallGeoDataCron 安装 GeoData 自动更新定时任务
 func InstallGeoDataCron() error {
-	cronLine := "0 4 * * * /usr/local/bin/vasmax --update-geodata\n"
+	cronLine := "0 4 * * * /usr/local/bin/VasmaX --update-geodata\n"
 	return os.WriteFile("/etc/cron.d/VasmaX-geodata", []byte(cronLine), 0644)
 }
