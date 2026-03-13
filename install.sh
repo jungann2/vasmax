@@ -11,7 +11,7 @@ readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 readonly LOG_DIR="/var/log/VasmaX"
 readonly SERVICE_FILE="/etc/systemd/system/VasmaX.service"
 readonly TLS_DIR="${CONFIG_DIR}/tls"
-readonly GITHUB_REPO="your-org/VasmaX-go"
+readonly GITHUB_REPO="jungann2/vasmax"
 
 # --- 颜色输出 ---
 red() { echo -e "\033[31m$1\033[0m"; }
