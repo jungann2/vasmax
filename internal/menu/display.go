@@ -84,6 +84,12 @@ func PrintSeparator() {
 	fmt.Println(strings.Repeat("─", 54))
 }
 
+// PrintSectionTitle prints a section divider with a title, used for grouping menu items.
+func PrintSectionTitle(title string) {
+	line := strings.Repeat("━", 40)
+	fmt.Printf("\n%s\n  %s\n%s\n", Cyan(line), Yellow(title), Cyan(line))
+}
+
 // ReadInput reads a line of input from the user with a prompt.
 func ReadInput(prompt string) string {
 	fmt.Printf("  %s: ", prompt)

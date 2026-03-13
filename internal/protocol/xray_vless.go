@@ -20,6 +20,15 @@ func (v *VlessTCPTLSVision) TransportType() string { return "tcp" }
 func (v *VlessTCPTLSVision) IsCDNCompatible() bool { return false }
 
 func (v *VlessTCPTLSVision) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2", "http/1.1"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vless",
@@ -29,15 +38,9 @@ func (v *VlessTCPTLSVision) GenerateInbound(params *InboundParams) (json.RawMess
 			"decryption": "none",
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "tcp",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"minVersion": "1.2",
-				"alpn":       []string{"h2", "http/1.1"},
-			},
+			"network":     "tcp",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 		},
 		"sniffing": map[string]interface{}{
 			"enabled":      true,
@@ -111,6 +114,15 @@ func (v *VlessWSTLS) TransportType() string { return "ws" }
 func (v *VlessWSTLS) IsCDNCompatible() bool { return true }
 
 func (v *VlessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2", "http/1.1"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vless",
@@ -120,14 +132,9 @@ func (v *VlessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, er
 			"decryption": "none",
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "ws",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"alpn": []string{"h2", "http/1.1"},
-			},
+			"network":     "ws",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 			"wsSettings": map[string]interface{}{
 				"path": params.Path,
 			},
@@ -215,6 +222,15 @@ func (v *VlessGRPCTLS) TransportType() string { return "grpc" }
 func (v *VlessGRPCTLS) IsCDNCompatible() bool { return true }
 
 func (v *VlessGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vless",
@@ -224,14 +240,9 @@ func (v *VlessGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, 
 			"decryption": "none",
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "grpc",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"alpn": []string{"h2"},
-			},
+			"network":     "grpc",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 			"grpcSettings": map[string]interface{}{
 				"serviceName": params.ServiceName,
 			},
@@ -666,6 +677,22 @@ func (v *VlessRealityXHTTP) GenerateSingBoxOutbound(user *api.User, info *Server
 }
 
 // --- 辅助函数 ---
+
+// tlsVersionSettings 根据 InboundParams 返回 minVersion/maxVersion 字段（仅非默认值时注入）
+func tlsVersionSettings(params *InboundParams) map[string]interface{} {
+	m := map[string]interface{}{}
+	min := params.TLSMinVersion
+	max := params.TLSMaxVersion
+	if min == "" {
+		min = "1.2"
+	}
+	if max == "" {
+		max = "1.3"
+	}
+	m["minVersion"] = min
+	m["maxVersion"] = max
+	return m
+}
 
 // buildVLESSClients 构建 VLESS 用户列表
 func buildVLESSClients(users []*api.User, withFlow bool) []map[string]interface{} {

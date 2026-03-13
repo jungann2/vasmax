@@ -32,9 +32,10 @@ func (m *TLSMenu) Show() {
 		PrintOption(3, "手动续期证书")
 		PrintOption(4, "切换证书提供商")
 		PrintOption(5, "检测面板证书路径")
+		PrintOption(6, fmt.Sprintf("TLS 版本设置（当前: %s ~ %s）", m.currentMinVersion(), m.currentMaxVersion()))
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6"})
 		switch choice {
 		case "1":
 			m.showCertStatus()
@@ -46,6 +47,8 @@ func (m *TLSMenu) Show() {
 			m.switchProvider()
 		case "5":
 			m.detectPanelCert()
+		case "6":
+			m.setTLSVersion()
 		case "0":
 			return
 		}
@@ -367,4 +370,86 @@ func (m *TLSMenu) providerName() string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// currentMinVersion 返回当前最低 TLS 版本（显示用）
+func (m *TLSMenu) currentMinVersion() string {
+	if m.config.TLS.MinVersion == "" {
+		return "1.2"
+	}
+	return m.config.TLS.MinVersion
+}
+
+// currentMaxVersion 返回当前最高 TLS 版本（显示用）
+func (m *TLSMenu) currentMaxVersion() string {
+	if m.config.TLS.MaxVersion == "" {
+		return "1.3"
+	}
+	return m.config.TLS.MaxVersion
+}
+
+// setTLSVersion 交互式设置 TLS 版本范围
+func (m *TLSMenu) setTLSVersion() {
+	PrintTitle("TLS 版本设置")
+	PrintInfo(fmt.Sprintf("当前版本范围: TLS %s ~ TLS %s", m.currentMinVersion(), m.currentMaxVersion()))
+	fmt.Println()
+	PrintInfo("选择最低 TLS 版本（客户端必须支持此版本及以上）:")
+	PrintOption(1, "TLS 1.0（兼容性最好，安全性低）")
+	PrintOption(2, "TLS 1.1（已废弃，不推荐）")
+	PrintOption(3, "TLS 1.2（推荐，安全且兼容）")
+	PrintOption(4, "TLS 1.3（最安全，部分旧客户端不支持）")
+	PrintOptionStr("0", "取消")
+
+	minChoice := ReadChoice("最低版本", []string{"1", "2", "3", "4"})
+	var minVer string
+	switch minChoice {
+	case "1":
+		minVer = "1.0"
+	case "2":
+		minVer = "1.1"
+	case "3":
+		minVer = "1.2"
+	case "4":
+		minVer = "1.3"
+	case "0":
+		return
+	}
+
+	// 最高版本：只有当最低版本不是 1.3 时才询问
+	maxVer := "1.3"
+	if minVer != "1.3" {
+		fmt.Println()
+		PrintInfo("选择最高 TLS 版本:")
+		PrintOption(1, "TLS 1.2")
+		PrintOption(2, "TLS 1.3（推荐）")
+		PrintOptionStr("0", "取消")
+
+		maxChoice := ReadChoice("最高版本", []string{"1", "2"})
+		switch maxChoice {
+		case "1":
+			maxVer = "1.2"
+		case "2":
+			maxVer = "1.3"
+		case "0":
+			return
+		}
+
+		// 校验：最高版本不能低于最低版本
+		if minVer == "1.2" && maxVer == "1.2" {
+			// 合法：仅允许 1.2
+		} else if minVer > maxVer {
+			PrintError("最高版本不能低于最低版本")
+			return
+		}
+	}
+
+	m.config.TLS.MinVersion = minVer
+	m.config.TLS.MaxVersion = maxVer
+	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		PrintError(fmt.Sprintf("保存配置失败: %v", err))
+		return
+	}
+
+	PrintSuccess(fmt.Sprintf("TLS 版本范围已设置为: %s ~ %s", minVer, maxVer))
+	PrintInfo("重启服务后生效（核心管理 → 重启核心）")
 }

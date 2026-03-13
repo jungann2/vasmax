@@ -38,12 +38,17 @@ VasmaX（V2ray Agent Service Management Assistant X）是一个基于 Go 语言�
 - Xboard 面板对接：用户同步、流量统计、在线追踪
 - 独立模式：无需面板，单机运行
 - 自动 TLS 证书申请与续订（acme.sh）
+- TLS 版本管理：支持设置最低/最高 TLS 版本（1.0 ~ 1.3）
 - 订阅链接生成（通用 / Clash / sing-box 格式）
+- 订阅管理：Salt 配置、域名设置、链接预览
 - 分流管理：WARP、IPv6、Socks5、DNS、SNI 反向代理
 - CDN 节点管理（Cloudflare 优选 IP）
 - 域名黑名单 / BT 下载管理
 - Hysteria2 端口跳跃与限速
 - Reality 密钥管理
+- 额外端口管理：TCP/UDP/双协议端口开放与防火墙联动
+- ALPN 协议切换：h2+http/1.1 / h2 only / http/1.1 only / h3 only
+- BBR 加速管理：32 项功能覆盖内核安装、加速启用、系统优化、内核管理
 - 配置自动备份与回滚
 - 多语言支持（中文 / English）
 - 系统健康检查与资源监控
@@ -102,8 +107,104 @@ vasmax
 4.  BT 下载管理     11. Xboard 对接管理
 5.  域名黑名单      12. TLS 证书管理
 6.  CDN 管理        13. 其他工具
-7.  订阅管理
+7.  订阅管理        0.  退出
 ```
+
+### 订阅管理（选项 7）
+
+- Salt 配置管理
+- 订阅域名设置
+- 订阅链接预览（通用 / Clash / sing-box 格式）
+
+### 额外端口管理（选项 8）
+
+- 添加/删除额外端口（TCP/UDP/双协议）
+- 查看已开放端口列表
+- 自动联动防火墙规则
+
+### ALPN 切换（选项 9）
+
+- h2 + http/1.1（默认）
+- h2 only
+- http/1.1 only
+- h3 only
+
+### TLS 证书管理（选项 12）
+
+- 证书申请与续订（acme.sh）
+- 证书状态查看
+- 手动指定证书路径
+- 证书自动续订管理
+- 强制续订
+- TLS 版本设置（最低/最高版本 1.0 ~ 1.3）
+
+### 其他工具（选项 13）
+
+- CDN 管理（启用/禁用/预设列表）
+- 伪装站管理（预设模板/自定义 URL）
+- 健康检查
+- BBR 加速管理（32 项功能，详见下方）
+- 卸载 VasmaX
+
+## BBR 加速管理
+
+进入路径：主菜单 → 13. 其他工具 → 4. BBR 加速管理
+
+菜单顶部显示当前内核版本、拥塞控制算法、队列调度和可用算法。
+
+共 32 项功能，分为四大类：
+
+### 内核安装类（需要重启）
+
+| 编号 | 功能 | 说明 |
+|------|------|------|
+| 1 | 安装 BBR 原版内核 | Debian/Ubuntu/CentOS/RHEL |
+| 2 | 安装 BBRplus 版内核 | 仅 Debian/Ubuntu |
+| 3 | 安装 Lotserver（锐速）内核 | 全平台 |
+| 4 | 安装 BBRplus 新版内核 | 仅 Debian/Ubuntu |
+| 5 | 安装 Zen 官方版内核 | 仅 Debian/Ubuntu |
+| 6 | 安装官方 cloud 内核 | Debian/Ubuntu/CentOS |
+| 7 | 安装官方稳定内核 | 全平台 |
+| 8 | 安装官方最新内核 | 全平台 |
+| 9 | 安装 XANMOD-main 内核 | 仅 Debian/Ubuntu |
+| 10 | 安装 XANMOD-LTS 内核 | 仅 Debian/Ubuntu |
+| 11 | 安装 XANMOD-EDGE 内核 | 仅 Debian/Ubuntu |
+| 12 | 安装 XANMOD-RT 内核 | 仅 Debian/Ubuntu |
+
+### 加速启用类（无需重启）
+
+| 编号 | 功能 | 拥塞控制 | 队列调度 |
+|------|------|----------|----------|
+| 13 | BBR + FQ（推荐） | bbr | fq |
+| 14 | BBR + FQ_PIE | bbr | fq_pie |
+| 15 | BBR + CAKE | bbr | cake |
+| 16 | BBR2 + FQ | bbr2 | fq |
+| 17 | BBR2 + FQ_PIE | bbr2 | fq_pie |
+| 18 | BBR2 + CAKE | bbr2 | cake |
+| 19 | BBRplus + FQ | bbrplus | fq |
+| 20 | Lotserver（锐速）加速 | — | — |
+| 21 | 编译安装 brutal 模块 | brutal | — |
+
+### 系统配置类
+
+| 编号 | 功能 |
+|------|------|
+| 22 | 开启 ECN |
+| 23 | 关闭 ECN |
+| 24 | 系统配置优化（旧方案） |
+| 25 | 系统配置优化（新方案，含更多 sysctl 调优） |
+| 26 | 禁用 IPv6 |
+| 27 | 开启 IPv6 |
+| 28 | 手动提交合并内核参数 |
+| 29 | 手动编辑内核参数 |
+
+### 内核管理类
+
+| 编号 | 功能 |
+|------|------|
+| 30 | 查看已安装内核列表 |
+| 31 | 删除/保留指定内核 |
+| 32 | 卸载全部加速配置 |
 
 ## 致谢
 

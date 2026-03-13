@@ -14,32 +14,37 @@ const DefaultConfigPath = "/etc/vasmax/config.yaml"
 
 // Config is the main VasmaX configuration structure.
 type Config struct {
-	Standalone   bool               `yaml:"standalone"`
-	Listen       string             `yaml:"listen"`
-	APIHost      string             `yaml:"api_host"`
-	APIToken     string             `yaml:"api_token"`
-	NodeID       int                `yaml:"node_id"`
-	NodeType     string             `yaml:"node_type"`
-	TLS          TLSConfig          `yaml:"tls"`
-	Log          LogConfig          `yaml:"log"`
-	Audit        AuditConfig        `yaml:"audit"`
-	Lang         string             `yaml:"lang"`
-	Protocols    []string           `yaml:"protocols"`
-	CoreType     string             `yaml:"core_type"`
-	CDN          CDNConfig          `yaml:"cdn"`
-	Subscription SubscriptionConfig `yaml:"subscription"`
-	Hysteria2    Hysteria2Config    `yaml:"hysteria2"`
-	Tuic         TuicConfig         `yaml:"tuic"`
-	Reality      RealityConfig      `yaml:"reality"`
-	Paths        PathsConfig        `yaml:"paths"`
+	Standalone        bool               `yaml:"standalone"`
+	Listen            string             `yaml:"listen"`
+	APIHost           string             `yaml:"api_host"`
+	APIToken          string             `yaml:"api_token"`
+	NodeID            int                `yaml:"node_id"`
+	NodeType          string             `yaml:"node_type"`
+	TLS               TLSConfig          `yaml:"tls"`
+	Log               LogConfig          `yaml:"log"`
+	Audit             AuditConfig        `yaml:"audit"`
+	Lang              string             `yaml:"lang"`
+	Protocols         []string           `yaml:"protocols"`
+	CoreType          string             `yaml:"core_type"`
+	CDN               CDNConfig          `yaml:"cdn"`
+	Subscription      SubscriptionConfig `yaml:"subscription"`
+	Hysteria2         Hysteria2Config    `yaml:"hysteria2"`
+	Tuic              TuicConfig         `yaml:"tuic"`
+	Reality           RealityConfig      `yaml:"reality"`
+	Paths             PathsConfig        `yaml:"paths"`
+	MonitoringEnabled bool               `yaml:"monitoring_enabled"`
+	ExtraPorts        []ExtraPort        `yaml:"extra_ports"`
+	ALPN              ALPNConfig         `yaml:"alpn"`
 }
 
 // TLSConfig holds TLS certificate settings.
 type TLSConfig struct {
-	CertFile string `yaml:"cert_file"`
-	KeyFile  string `yaml:"key_file"`
-	Domain   string `yaml:"domain"`
-	Provider string `yaml:"provider"`
+	CertFile   string `yaml:"cert_file"`
+	KeyFile    string `yaml:"key_file"`
+	Domain     string `yaml:"domain"`
+	Provider   string `yaml:"provider"`
+	MinVersion string `yaml:"min_version"` // "1.0", "1.1", "1.2", "1.3"（默认 "1.2"）
+	MaxVersion string `yaml:"max_version"` // "1.2", "1.3"（默认 "1.3"）
 }
 
 // LogConfig holds logging settings.
@@ -101,6 +106,18 @@ type PathsConfig struct {
 	NginxConf   string `yaml:"nginx_conf"`
 }
 
+// ExtraPort 额外开放的端口规则
+type ExtraPort struct {
+	Port     int    `yaml:"port"`
+	Protocol string `yaml:"protocol"` // "tcp" / "udp" / "both"
+	Note     string `yaml:"note"`
+}
+
+// ALPNConfig 全局 ALPN 设置
+type ALPNConfig struct {
+	Mode string `yaml:"mode"` // "h2_http11"（默认）/ "h2_only" / "http11_only" / "h3_only"
+}
+
 // setDefaults fills in default values for fields that are empty.
 func (c *Config) setDefaults() {
 	if c.Log.Level == "" {
@@ -133,6 +150,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	var cfg Config
+	cfg.MonitoringEnabled = true
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}

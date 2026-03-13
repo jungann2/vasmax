@@ -170,12 +170,14 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		}
 
 		params := &protocol.InboundParams{
-			Port:     p.DefaultPort(),
-			Domain:   l.config.TLS.Domain,
-			CertFile: l.config.TLS.CertFile,
-			KeyFile:  l.config.TLS.KeyFile,
-			Users:    apiUsers,
-			Tag:      protoName,
+			Port:          p.DefaultPort(),
+			Domain:        l.config.TLS.Domain,
+			CertFile:      l.config.TLS.CertFile,
+			KeyFile:       l.config.TLS.KeyFile,
+			Users:         apiUsers,
+			Tag:           protoName,
+			TLSMinVersion: l.config.TLS.MinVersion,
+			TLSMaxVersion: l.config.TLS.MaxVersion,
 		}
 		if l.config.Reality.PrivateKey != "" {
 			params.Reality = &l.config.Reality
@@ -301,6 +303,9 @@ func (l *Loop) collectXrayTraffic() {
 
 // pushData 上报流量、在线用户、节点状态
 func (l *Loop) pushData(ctx context.Context) error {
+	// 初始化静态信息（仅首次生效，内部使用 sync.Once）
+	sysinfo.InitStaticInfo()
+
 	// 0. 从 Xray Stats API 采集流量并累加到 trafficCounter
 	l.collectXrayTraffic()
 
@@ -322,13 +327,15 @@ func (l *Loop) pushData(ctx context.Context) error {
 		}
 	}
 
-	// 3. 节点状态上报
-	status, err := sysinfo.CollectStatus()
-	if err != nil {
-		l.logger.WithError(err).Warn("采集节点状态失败")
-	} else {
-		if err := l.apiClient.PushStatus(status); err != nil {
-			l.logger.WithError(err).Warn("节点状态上报失败")
+	// 3. 节点状态上报（受监控开关控制）
+	if l.config.MonitoringEnabled {
+		status, err := sysinfo.CollectStatus()
+		if err != nil {
+			l.logger.WithError(err).Warn("采集节点状态失败")
+		} else {
+			if err := l.apiClient.PushStatus(status); err != nil {
+				l.logger.WithError(err).Warn("节点状态上报失败")
+			}
 		}
 	}
 

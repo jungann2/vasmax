@@ -20,6 +20,15 @@ func (t *TrojanTCPTLS) TransportType() string { return "tcp" }
 func (t *TrojanTCPTLS) IsCDNCompatible() bool { return false }
 
 func (t *TrojanTCPTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2", "http/1.1"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "trojan",
@@ -28,14 +37,9 @@ func (t *TrojanTCPTLS) GenerateInbound(params *InboundParams) (json.RawMessage, 
 			"clients": buildTrojanClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "tcp",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"alpn": []string{"h2", "http/1.1"},
-			},
+			"network":     "tcp",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 		},
 		"sniffing": map[string]interface{}{
 			"enabled":      true,
@@ -103,6 +107,15 @@ func (t *TrojanGRPCTLS) TransportType() string { return "grpc" }
 func (t *TrojanGRPCTLS) IsCDNCompatible() bool { return true }
 
 func (t *TrojanGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "trojan",
@@ -111,14 +124,9 @@ func (t *TrojanGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage,
 			"clients": buildTrojanClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "grpc",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"alpn": []string{"h2"},
-			},
+			"network":     "grpc",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 			"grpcSettings": map[string]interface{}{
 				"serviceName": params.ServiceName,
 			},

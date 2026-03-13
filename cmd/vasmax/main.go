@@ -18,9 +18,15 @@ import (
 	"vasmax/internal/audit"
 	internalConfig "vasmax/internal/config"
 	"vasmax/internal/core"
+	"vasmax/internal/firewall"
 	"vasmax/internal/i18n"
+	menuPkg "vasmax/internal/menu"
+	"vasmax/internal/nginx"
 	"vasmax/internal/protocol"
+	"vasmax/internal/rollback"
+	"vasmax/internal/route"
 	"vasmax/internal/security"
+	"vasmax/internal/subscription"
 	internalSync "vasmax/internal/sync"
 	"vasmax/internal/sysinfo"
 	"vasmax/internal/traffic"
@@ -81,8 +87,26 @@ func main() {
 
 	// 交互式菜单模式
 	if *showMenu {
-		// TODO: 菜单系统将在 Task 26 实现
-		fmt.Println("交互式菜单尚未实现")
+		coreMgr := core.NewManager(cfg, logger)
+		reg := protocol.DefaultRegistry()
+		rbMgr := rollback.NewManager("/etc/vasmax/snapshots", logger)
+		userMgr := user.NewManager()
+		subMgr, _ := subscription.NewManager(cfg, reg, userMgr, logger)
+		routeMgr := route.NewManager(cfg.Paths.XrayConf, cfg.Paths.SingBoxConf, logger)
+		btMgr := route.NewBTManager(routeMgr)
+		blMgr := route.NewBlacklistManager(routeMgr)
+		warpMgr := route.NewWARPManager(logger)
+		nginxMgr := nginx.NewManager(cfg.Paths.NginxConf, logger)
+		fwMgr := firewall.NewManager(logger)
+
+		mainMenu := menuPkg.NewMainMenu(
+			cfg, coreMgr, reg, rbMgr,
+			userMgr, subMgr,
+			routeMgr, btMgr, blMgr, warpMgr,
+			nginxMgr, fwMgr,
+			logger,
+		)
+		mainMenu.Show()
 		return
 	}
 

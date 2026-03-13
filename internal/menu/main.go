@@ -3,20 +3,70 @@ package menu
 import (
 	"fmt"
 
+	"github.com/sirupsen/logrus"
+
 	"vasmax/internal/config"
 	"vasmax/internal/core"
+	"vasmax/internal/firewall"
 	"vasmax/internal/i18n"
+	"vasmax/internal/nginx"
+	"vasmax/internal/protocol"
+	"vasmax/internal/rollback"
+	"vasmax/internal/route"
+	"vasmax/internal/subscription"
+	"vasmax/internal/user"
 )
 
 // MainMenu displays the main interactive menu.
 type MainMenu struct {
-	config  *config.Config
-	coreMgr *core.Manager
+	config    *config.Config
+	coreMgr   *core.Manager
+	logger    *logrus.Logger
+	install   *InstallMenu
+	account   *AccountMenu
+	routing   *RoutingMenu
+	tools     *ToolsMenu
+	xboard    *XboardMenu
+	tls       *TLSMenu
+	protocols *ProtocolMenus
+	coreMenu  *CoreMenu
+	subMenu   *SubscriptionMenu
+	portMenu  *PortMenu
+	alpnMenu  *ALPNMenu
 }
 
-// NewMainMenu creates a new main menu.
-func NewMainMenu(cfg *config.Config, coreMgr *core.Manager) *MainMenu {
-	return &MainMenu{config: cfg, coreMgr: coreMgr}
+// NewMainMenu creates a new main menu with all sub-menus wired up.
+func NewMainMenu(
+	cfg *config.Config,
+	coreMgr *core.Manager,
+	reg *protocol.Registry,
+	rbMgr *rollback.Manager,
+	userMgr *user.Manager,
+	subMgr *subscription.Manager,
+	routeMgr *route.Manager,
+	btMgr *route.BTManager,
+	blMgr *route.BlacklistManager,
+	warpMgr *route.WARPManager,
+	nginxMgr *nginx.Manager,
+	fwMgr *firewall.Manager,
+	logger *logrus.Logger,
+) *MainMenu {
+	return &MainMenu{
+		config:    cfg,
+		coreMgr:   coreMgr,
+		logger:    logger,
+		install:   NewInstallMenu(cfg, coreMgr, reg, rbMgr, logger),
+		account:   NewAccountMenu(userMgr, subMgr),
+		routing:   NewRoutingMenu(routeMgr, btMgr, blMgr, warpMgr),
+		tools:     NewToolsMenu(cfg, nginxMgr, logger),
+		xboard:    NewXboardMenu(cfg, logger),
+		tls:       NewTLSMenu(cfg, logger),
+		protocols: NewProtocolMenus(cfg, fwMgr, logger),
+		coreMenu:  NewCoreMenu(coreMgr, logger),
+		subMenu:   NewSubscriptionMenu(cfg, subMgr, userMgr, logger),
+		portMenu:  NewPortMenu(cfg, fwMgr, logger),
+		alpnMenu:  NewALPNMenu(cfg, logger),
+	}
 }
 
 // Show displays the main menu and handles user input.
@@ -30,31 +80,31 @@ func (m *MainMenu) Show() {
 
 		switch choice {
 		case "1":
-			PrintInfo("安装管理 - TODO")
+			m.install.Show()
 		case "2":
-			PrintInfo("账号管理 - TODO")
+			m.account.Show()
 		case "3":
-			PrintInfo("分流工具 - TODO")
+			m.routing.Show()
 		case "4":
-			PrintInfo("BT 下载管理 - TODO")
+			m.routing.Show() // BT 下载管理（RoutingMenu 子项）
 		case "5":
-			PrintInfo("域名黑名单 - TODO")
+			m.routing.Show() // 域名黑名单（RoutingMenu 子项）
 		case "6":
-			PrintInfo("CDN 管理 - TODO")
+			m.tools.Show() // CDN 管理（ToolsMenu 子项）
 		case "7":
-			PrintInfo("订阅管理 - TODO")
+			m.subMenu.Show()
 		case "8":
-			PrintInfo("额外端口管理 - TODO")
+			m.portMenu.Show()
 		case "9":
-			PrintInfo("ALPN 切换 - TODO")
+			m.alpnMenu.Show()
 		case "10":
-			PrintInfo("核心管理 - TODO")
+			m.coreMenu.Show()
 		case "11":
-			PrintInfo("xboard 对接管理 - TODO")
+			m.xboard.Show()
 		case "12":
-			PrintInfo("TLS 证书管理 - TODO")
+			m.tls.Show()
 		case "13":
-			PrintInfo("其他工具 - TODO")
+			m.tools.Show()
 		case "0":
 			return
 		}

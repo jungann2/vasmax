@@ -20,6 +20,15 @@ func (v *VMessWSTLS) TransportType() string { return "ws" }
 func (v *VMessWSTLS) IsCDNCompatible() bool { return true }
 
 func (v *VMessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2", "http/1.1"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vmess",
@@ -28,14 +37,9 @@ func (v *VMessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, er
 			"clients": buildVMessClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "ws",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"alpn": []string{"h2", "http/1.1"},
-			},
+			"network":     "ws",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 			"wsSettings": map[string]interface{}{
 				"path": params.Path,
 			},
@@ -137,6 +141,15 @@ func (v *VMessHTTPUpgradeTLS) TransportType() string { return "httpupgrade" }
 func (v *VMessHTTPUpgradeTLS) IsCDNCompatible() bool { return true }
 
 func (v *VMessHTTPUpgradeTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
+	tlsSettings := map[string]interface{}{
+		"certificates": []map[string]interface{}{
+			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
+		},
+		"alpn": []string{"h2", "http/1.1"},
+	}
+	for k, val := range tlsVersionSettings(params) {
+		tlsSettings[k] = val
+	}
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vmess",
@@ -145,14 +158,9 @@ func (v *VMessHTTPUpgradeTLS) GenerateInbound(params *InboundParams) (json.RawMe
 			"clients": buildVMessClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":  "httpupgrade",
-			"security": "tls",
-			"tlsSettings": map[string]interface{}{
-				"certificates": []map[string]interface{}{
-					{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-				},
-				"alpn": []string{"h2", "http/1.1"},
-			},
+			"network":     "httpupgrade",
+			"security":    "tls",
+			"tlsSettings": tlsSettings,
 			"httpupgradeSettings": map[string]interface{}{
 				"path": params.Path,
 				"host": params.Domain,

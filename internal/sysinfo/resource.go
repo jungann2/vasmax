@@ -3,52 +3,101 @@ package sysinfo
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"vasmax/internal/api"
 )
 
+// StaticInfo 缓存启动时采集一次的静态系统信息
+type StaticInfo struct {
+	Hostname string
+	CPUModel string
+	IPv4     string
+	IPv6     string
+}
+
+var (
+	cachedStaticInfo StaticInfo
+	staticInfoOnce   sync.Once
+)
+
+// InitStaticInfo 采集静态系统信息（hostname、cpu_model、ipv4、ipv6），仅执行一次
+func InitStaticInfo() {
+	staticInfoOnce.Do(func() {
+		cachedStaticInfo.Hostname, _ = os.Hostname()
+		cachedStaticInfo.CPUModel = readCPUModel()
+		cachedStaticInfo.IPv4 = detectPublicIP([]string{
+			"https://api.ipify.org",
+			"https://ifconfig.me/ip",
+			"https://icanhazip.com",
+		})
+		cachedStaticInfo.IPv6 = detectPublicIPv6()
+		log.Infof("静态信息采集完成: hostname=%s, cpu_model=%s, ipv4=%s, ipv6=%s",
+			cachedStaticInfo.Hostname, cachedStaticInfo.CPUModel,
+			cachedStaticInfo.IPv4, cachedStaticInfo.IPv6)
+	})
+}
+
 // CollectStatus 采集节点负载状态（用于 xboard 上报）
-func CollectStatus() (*api.NodeStatus, error) {
-	status := &api.NodeStatus{}
+// 使用 recover() 保护，防止 panic 导致 goroutine 崩溃
+func CollectStatus() (status *api.NodeStatus, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("CollectStatus panic recovered: %v", r)
+			status = nil
+			err = fmt.Errorf("CollectStatus panic: %v", r)
+		}
+	}()
+
+	status = &api.NodeStatus{}
 
 	// CPU 使用率
-	cpu, err := readCPUUsage()
-	if err == nil {
+	cpu, cpuErr := readCPUUsage()
+	if cpuErr == nil {
 		status.CPU = cpu
 	}
 
 	// 内存
-	mem, err := readMemInfo()
-	if err == nil {
+	mem, memErr := readMemInfo()
+	if memErr == nil {
 		status.Mem = mem.Mem
 		status.Swap = mem.Swap
 	}
 
 	// 磁盘
-	disk, err := readDiskUsage("/")
-	if err == nil {
+	disk, diskErr := readDiskUsage("/")
+	if diskErr == nil {
 		status.Disk = disk
 	}
 
-	return status, nil
-}
+	// 网络流量
+	status.Network = readNetworkStats()
 
-// CheckDiskSpace 检查磁盘可用空间
-func CheckDiskSpace(path string, requiredMB int) error {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return fmt.Errorf("获取磁盘信息失败: %w", err)
-	}
-	availMB := int64(stat.Bavail) * int64(stat.Bsize) / (1024 * 1024)
-	if availMB < int64(requiredMB) {
-		return fmt.Errorf("磁盘空间不足: 需要 %dMB, 可用 %dMB", requiredMB, availMB)
-	}
-	return nil
+	// 磁盘 IO
+	status.DiskIO = readDiskIOStats()
+
+	// 系统运行时间
+	status.Uptime = readUptime()
+
+	// Goroutine 数量
+	status.Goroutines = runtime.NumGoroutine()
+
+	// 静态信息（从缓存读取）
+	status.Hostname = cachedStaticInfo.Hostname
+	status.CPUModel = cachedStaticInfo.CPUModel
+	status.IPv4 = cachedStaticInfo.IPv4
+	status.IPv6 = cachedStaticInfo.IPv6
+
+	return status, nil
 }
 
 type memResult struct {
@@ -135,16 +184,128 @@ func readCPUUsage() (float64, error) {
 	return (totalDelta - idleDelta) / totalDelta * 100, nil
 }
 
-// readDiskUsage 读取磁盘使用情况
-func readDiskUsage(path string) (api.ResourceUsage, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return api.ResourceUsage{}, err
+// readNetworkStats 从 /proc/net/dev 读取网络流量，汇总物理网卡（排除 lo/docker/veth/br-）
+func readNetworkStats() api.NetworkUsage {
+	f, err := os.Open("/proc/net/dev")
+	if err != nil {
+		log.Warn("读取 /proc/net/dev 失败: ", err)
+		return api.NetworkUsage{}
 	}
-	total := int64(stat.Blocks) * int64(stat.Bsize)
-	free := int64(stat.Bfree) * int64(stat.Bsize)
-	return api.ResourceUsage{
-		Total: total,
-		Used:  total - free,
-	}, nil
+	defer f.Close()
+	return parseNetworkStats(f)
+}
+
+// isVirtualInterface 判断网络接口是否为虚拟接口（应排除）
+func isVirtualInterface(name string) bool {
+	return name == "lo" ||
+		strings.HasPrefix(name, "docker") ||
+		strings.HasPrefix(name, "veth") ||
+		strings.HasPrefix(name, "br-")
+}
+
+// parseNetworkStats 从 reader 解析 /proc/net/dev 格式内容，汇总物理网卡流量
+func parseNetworkStats(r io.Reader) api.NetworkUsage {
+	var result api.NetworkUsage
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// 跳过头部行（不含 ":"）
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		iface := strings.TrimSpace(line[:idx])
+
+		// 排除虚拟接口
+		if isVirtualInterface(iface) {
+			continue
+		}
+
+		fields := strings.Fields(line[idx+1:])
+		if len(fields) < 9 {
+			continue
+		}
+
+		recv, _ := strconv.ParseInt(fields[0], 10, 64)
+		sent, _ := strconv.ParseInt(fields[8], 10, 64)
+		result.Recv += recv
+		result.Sent += sent
+	}
+	return result
+}
+
+// physicalDiskRe 匹配物理磁盘设备名（sda/vda/nvme0n1 等，排除分区如 sda1）
+var physicalDiskRe = regexp.MustCompile(`^(sd|vd)[a-z]$|^nvme\d+n\d+$`)
+
+// readDiskIOStats 从 /proc/diskstats 读取磁盘 IO，仅统计物理磁盘
+func readDiskIOStats() api.DiskIOUsage {
+	f, err := os.Open("/proc/diskstats")
+	if err != nil {
+		log.Warn("读取 /proc/diskstats 失败: ", err)
+		return api.DiskIOUsage{}
+	}
+	defer f.Close()
+
+	var result api.DiskIOUsage
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 10 {
+			continue
+		}
+		device := fields[2]
+		if !physicalDiskRe.MatchString(device) {
+			continue
+		}
+
+		// field 6 = sectors read, field 10 = sectors written (512 bytes per sector)
+		readSectors, _ := strconv.ParseInt(fields[5], 10, 64)
+		writeSectors, _ := strconv.ParseInt(fields[9], 10, 64)
+		result.Read += readSectors * 512
+		result.Write += writeSectors * 512
+	}
+	return result
+}
+
+// readUptime 从 /proc/uptime 读取系统运行时间（秒）
+func readUptime() int64 {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		log.Warn("读取 /proc/uptime 失败: ", err)
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 1 {
+		log.Warn("解析 /proc/uptime 失败: 内容为空")
+		return 0
+	}
+	val, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		log.Warn("解析 /proc/uptime 失败: ", err)
+		return 0
+	}
+	return int64(val)
+}
+
+// readCPUModel 从 /proc/cpuinfo 读取 CPU 型号
+func readCPUModel() string {
+	f, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		log.Warn("读取 /proc/cpuinfo 失败: ", err)
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "model name") {
+			idx := strings.Index(line, ":")
+			if idx >= 0 {
+				return strings.TrimSpace(line[idx+1:])
+			}
+		}
+	}
+	log.Warn("未找到 CPU model name 信息")
+	return ""
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -276,5 +277,78 @@ func TestValidate_MultipleErrors(t *testing.T) {
 	}
 	if !strings.Contains(errStr, "node_id") {
 		t.Error("expected node_id error")
+	}
+}
+
+// --- MonitoringEnabled unit tests (Requirement 15.3) ---
+
+func writeTestYAML(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+	return path
+}
+
+func TestMonitoringEnabled_DefaultTrue_WhenNotSpecified(t *testing.T) {
+	yaml := `standalone: true
+log:
+  level: info
+`
+	path := writeTestYAML(t, yaml)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if !cfg.MonitoringEnabled {
+		t.Error("MonitoringEnabled should default to true when not specified in YAML")
+	}
+}
+
+func TestMonitoringEnabled_ExplicitFalse(t *testing.T) {
+	yaml := `standalone: true
+log:
+  level: info
+monitoring_enabled: false
+`
+	path := writeTestYAML(t, yaml)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.MonitoringEnabled {
+		t.Error("MonitoringEnabled should be false when explicitly set to false")
+	}
+}
+
+func TestMonitoringEnabled_ExplicitTrue(t *testing.T) {
+	yaml := `standalone: true
+log:
+  level: info
+monitoring_enabled: true
+`
+	path := writeTestYAML(t, yaml)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if !cfg.MonitoringEnabled {
+		t.Error("MonitoringEnabled should be true when explicitly set to true")
+	}
+}
+
+func TestMonitoringEnabled_ValidationPassesRegardless(t *testing.T) {
+	// MonitoringEnabled should not affect Validate() — both true and false are valid.
+	for _, enabled := range []bool{true, false} {
+		cfg := &Config{
+			Standalone:        true,
+			Log:               LogConfig{Level: "info"},
+			MonitoringEnabled: enabled,
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate() should pass with MonitoringEnabled=%v, got: %v", enabled, err)
+		}
 	}
 }

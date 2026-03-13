@@ -34,17 +34,19 @@ type Protocol interface {
 
 // InboundParams 入站配置参数
 type InboundParams struct {
-	Port        int
-	Domain      string
-	CertFile    string
-	KeyFile     string
-	Path        string // WS/HTTPUpgrade 路径
-	ServiceName string // gRPC serviceName
-	Users       []*api.User
-	Tag         string // 入站 tag
-	Reality     *config.RealityConfig
-	Hysteria2   *config.Hysteria2Config
-	Tuic        *config.TuicConfig
+	Port          int
+	Domain        string
+	CertFile      string
+	KeyFile       string
+	Path          string // WS/HTTPUpgrade 路径
+	ServiceName   string // gRPC serviceName
+	Users         []*api.User
+	Tag           string // 入站 tag
+	Reality       *config.RealityConfig
+	Hysteria2     *config.Hysteria2Config
+	Tuic          *config.TuicConfig
+	TLSMinVersion string // "1.0"/"1.1"/"1.2"/"1.3"，空值默认 "1.2"
+	TLSMaxVersion string // "1.2"/"1.3"，空值默认 "1.3"
 }
 
 // ServerInfo 服务器连接信息（用于生成订阅链接）
