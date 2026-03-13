@@ -8,7 +8,7 @@ readonly BINARY_NAME="VasmaX"
 readonly INSTALL_PATH="/usr/local/bin/${BINARY_NAME}"
 readonly CONFIG_DIR="/etc/vasmax"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
-readonly LOG_DIR="/var/log/VasmaX"
+readonly LOG_DIR="/var/log/vasmax"
 readonly SERVICE_FILE="/etc/systemd/system/VasmaX.service"
 readonly TLS_DIR="${CONFIG_DIR}/tls"
 readonly GITHUB_REPO="jungann2/vasmax"
@@ -88,7 +88,8 @@ download_binary() {
     # SHA256 校验
     echo "校验 SHA256..."
     local expected_hash
-    if expected_hash="$(curl -fsSL "${sha256_url}" 2>/dev/null | awk '{print $1}')"; then
+    if expected_hash="$(curl -fsSL "${sha256_url}" 2>/dev/null)" && [[ -n "${expected_hash}" ]]; then
+        expected_hash="$(echo "${expected_hash}" | awk '{print $1}')"
         local actual_hash
         actual_hash="$(sha256sum "${tmp_file}" | awk '{print $1}')"
         if [[ "${expected_hash}" != "${actual_hash}" ]]; then
@@ -376,8 +377,9 @@ do_install() {
 
 do_update() {
     detect_os
+    systemctl stop VasmaX 2>/dev/null || true
     download_binary
-    systemctl restart VasmaX
+    systemctl start VasmaX
     green "更新完成"
 }
 

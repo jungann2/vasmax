@@ -24,7 +24,7 @@ type Manager struct {
 
 // NewManager 创建订阅管理器
 func NewManager(cfg *config.Config, reg *protocol.Registry, um *user.Manager, logger *logrus.Logger) (*Manager, error) {
-	salt, err := LoadOrCreateSalt("/etc/VasmaX")
+	salt, err := LoadOrCreateSalt("/etc/vasmax")
 	if err != nil {
 		logger.Warnf("failed to load/create salt: %v, using generated salt", err)
 	}
