@@ -118,7 +118,7 @@ func (m *MainMenu) printHeader() {
 	if m.config.Standalone {
 		PrintInfo("运行模式: " + Green("独立模式"))
 	} else {
-		PrintInfo("运行模式: " + Cyan("[xboard 托管模式]"))
+		PrintInfo("运行模式: " + Cyan("[Xboard2 托管模式]"))
 	}
 
 	// 显示核心状态
@@ -168,7 +168,7 @@ func (m *MainMenu) printOptions() {
 	PrintOption(8, "额外端口管理")
 	PrintOption(9, "ALPN 切换")
 	PrintOption(10, "核心管理")
-	PrintOption(11, "xboard 对接管理")
+	PrintOption(11, "Xboard2 对接管理")
 	PrintOption(12, "TLS 证书管理")
 	PrintOption(13, "其他工具")
 	PrintOptionStr("0", "退出")

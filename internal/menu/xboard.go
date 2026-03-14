@@ -24,16 +24,16 @@ func NewXboardMenu(cfg *config.Config, logger *logrus.Logger) *XboardMenu {
 // Show displays the xboard management menu.
 func (m *XboardMenu) Show() {
 	for {
-		PrintTitle("xboard 对接管理")
+		PrintTitle("Xboard2 对接管理")
 		if !m.config.Standalone && m.config.APIHost != "" {
 			PrintInfo("状态: " + Green("已启用"))
-			PrintInfo(fmt.Sprintf("API: %s  NodeID: %d", m.config.APIHost, m.config.NodeID))
+			PrintInfo(fmt.Sprintf("API: %s  节点ID: %d", m.config.APIHost, m.config.NodeID))
 		} else {
 			PrintInfo("状态: " + Yellow("未启用"))
 		}
 		PrintSeparator()
-		PrintOption(1, "启用 xboard 对接")
-		PrintOption(2, "禁用 xboard 对接")
+		PrintOption(1, "启用 Xboard2 对接")
+		PrintOption(2, "禁用 Xboard2 对接")
 		PrintOption(3, "测试连接")
 		PrintOption(4, "修改配置")
 		PrintOptionStr("0", "返回上级菜单")
@@ -55,7 +55,7 @@ func (m *XboardMenu) Show() {
 }
 
 func (m *XboardMenu) enable() {
-	PrintTitle("启用 xboard 对接")
+	PrintTitle("启用 Xboard2 对接")
 
 	apiHost := ReadInput("请输入 API 地址 (https://...)")
 	if err := security.ValidateURL(apiHost); err != nil {
@@ -63,22 +63,22 @@ func (m *XboardMenu) enable() {
 		return
 	}
 
-	apiToken := ReadInput("请输入 API Token")
+	apiToken := ReadInput("请输入通信密钥")
 	if apiToken == "" {
-		PrintError("Token 不能为空")
+		PrintError("通信密钥不能为空")
 		return
 	}
 
-	nodeIDStr := ReadInput("请输入 Node ID")
+	nodeIDStr := ReadInput("请输入节点 ID")
 	var nodeID int
 	if _, err := fmt.Sscanf(nodeIDStr, "%d", &nodeID); err != nil || nodeID <= 0 {
-		PrintError("Node ID 无效")
+		PrintError("节点 ID 无效")
 		return
 	}
 
-	nodeType := ReadInput("请输入 Node Type (vless/vmess/trojan/hysteria/tuic/anytls)")
+	nodeType := ReadInput("请输入节点类型 (vless/vmess/trojan/hysteria/tuic/anytls)")
 	if nodeType == "" {
-		PrintError("Node Type 不能为空")
+		PrintError("节点类型不能为空")
 		return
 	}
 
@@ -104,11 +104,11 @@ func (m *XboardMenu) enable() {
 		return
 	}
 
-	PrintSuccess("xboard 对接已启用，请重启 VasmaX 生效")
+	PrintSuccess("Xboard2 对接已启用，请重启 VasmaX 生效")
 }
 
 func (m *XboardMenu) disable() {
-	if !Confirm("确认禁用 xboard 对接? 将切换回独立模式") {
+	if !Confirm("确认禁用 Xboard2 对接? 将切换回独立模式") {
 		return
 	}
 
@@ -137,10 +137,10 @@ func (m *XboardMenu) testConnection() {
 }
 
 func (m *XboardMenu) modifyConfig() {
-	PrintTitle("修改 xboard 配置")
+	PrintTitle("修改 Xboard2 配置")
 	PrintInfo(fmt.Sprintf("当前 API: %s", m.config.APIHost))
-	PrintInfo(fmt.Sprintf("当前 NodeID: %d", m.config.NodeID))
-	PrintInfo(fmt.Sprintf("当前 NodeType: %s", m.config.NodeType))
+	PrintInfo(fmt.Sprintf("当前节点ID: %d", m.config.NodeID))
+	PrintInfo(fmt.Sprintf("当前节点类型: %s", m.config.NodeType))
 
 	apiHost := ReadInput("新 API 地址（留空不修改）")
 	if apiHost != "" {
@@ -151,12 +151,12 @@ func (m *XboardMenu) modifyConfig() {
 		m.config.APIHost = apiHost
 	}
 
-	apiToken := ReadInput("新 API Token（留空不修改）")
+	apiToken := ReadInput("新通信密钥（留空不修改）")
 	if apiToken != "" {
 		m.config.APIToken = apiToken
 	}
 
-	nodeIDStr := ReadInput("新 Node ID（留空不修改）")
+	nodeIDStr := ReadInput("新节点 ID（留空不修改）")
 	if nodeIDStr != "" {
 		var nodeID int
 		if _, err := fmt.Sscanf(nodeIDStr, "%d", &nodeID); err == nil && nodeID > 0 {
