@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # VasmaX 部署脚本
-# 功能：系统检测、依赖安装、Go 二进制下载与校验、systemd 服务配置�?#       TLS 证书管理（acme.sh）、Nginx 安装、卸载清�?
+# 功能：系统检测、依赖安装、Go 二进制下载与校验、systemd 服务配置、
+#       TLS 证书管理（acme.sh）、Nginx 安装、卸载清理
 readonly VERSION="1.0.0"
 readonly BINARY_NAME="VasmaX"
 readonly INSTALL_PATH="/usr/local/bin/${BINARY_NAME}"
@@ -18,7 +19,7 @@ red() { echo -e "\033[31m$1\033[0m"; }
 green() { echo -e "\033[32m$1\033[0m"; }
 yellow() { echo -e "\033[33m$1\033[0m"; }
 
-# --- 系统检�?---
+# --- 系统检测 ---
 detect_os() {
     if [[ -f /etc/os-release ]]; then
         # shellcheck source=/dev/null
@@ -61,7 +62,7 @@ install_deps() {
     esac
 }
 
-# --- 下载二进�?---
+# --- 下载二进制 ---
 download_binary() {
     local version="${1:-latest}"
     local download_url
@@ -104,7 +105,8 @@ download_binary() {
         yellow "SHA256 校验文件不可用，跳过校验"
     fi
 
-    # 安装二进�?    mv "${tmp_file}" "${INSTALL_PATH}"
+    # 安装二进制
+    mv "${tmp_file}" "${INSTALL_PATH}"
     chmod 755 "${INSTALL_PATH}"
     green "已安装到 ${INSTALL_PATH}"
 }
@@ -152,10 +154,10 @@ EOF
 ALIAS
     chmod 755 /usr/local/bin/vasmax
 
-    green "systemd 服务已配�?
+    green "systemd 服务已配置"
 }
 
-# --- 初始化目�?---
+# --- 初始化目录 ---
 init_dirs() {
     mkdir -p "${CONFIG_DIR}" "${CONFIG_DIR}/xray/conf" "${CONFIG_DIR}/sing-box/conf/config"
     mkdir -p "${CONFIG_DIR}/subscribe" "${CONFIG_DIR}/subscribe_local" "${CONFIG_DIR}/subscribe_remote"
@@ -196,7 +198,7 @@ YAML
 # --- TLS 证书管理 ---
 install_acme() {
     if command -v ~/.acme.sh/acme.sh &>/dev/null; then
-        green "acme.sh 已安�?
+        green "acme.sh 已安装"
         return
     fi
     echo "安装 acme.sh..."
@@ -227,24 +229,25 @@ issue_cert() {
         dns_cf)
             # Cloudflare DNS API
             if [[ -z "${CF_Token:-}" ]]; then
-                red "请设�?CF_Token 环境变量"
+                red "请设置 CF_Token 环境变量"
                 return 1
             fi
             export CF_Token
             ~/.acme.sh/acme.sh --issue -d "${domain}" --dns dns_cf ${ca_server}
             ;;
         dns_ali)
-            # 阿里�?DNS API
+            # 阿里云 DNS API
             if [[ -z "${Ali_Key:-}" ]] || [[ -z "${Ali_Secret:-}" ]]; then
-                red "请设�?Ali_Key �?Ali_Secret 环境变量"
+                red "请设置 Ali_Key 和 Ali_Secret 环境变量"
                 return 1
             fi
             export Ali_Key Ali_Secret
             ~/.acme.sh/acme.sh --issue -d "${domain}" --dns dns_ali ${ca_server}
             ;;
         dns_cf_wildcard)
-            # 通配符证�?            if [[ -z "${CF_Token:-}" ]]; then
-                red "请设�?CF_Token 环境变量"
+            # 通配符证书
+            if [[ -z "${CF_Token:-}" ]]; then
+                red "请设置 CF_Token 环境变量"
                 return 1
             fi
             export CF_Token
@@ -261,9 +264,10 @@ issue_cert() {
 
     chmod 600 "${TLS_DIR}/${domain}.key"
 
-    # 确保 acme.sh cron job 已配置（自动续期�?    if ! crontab -l 2>/dev/null | grep -q "acme.sh"; then
+    # 确保 acme.sh cron job 已配置（自动续期）
+    if ! crontab -l 2>/dev/null | grep -q "acme.sh"; then
         ~/.acme.sh/acme.sh --install-cronjob
-        green "已配�?acme.sh 自动续期 cron job"
+        green "已配置 acme.sh 自动续期 cron job"
     fi
 
     green "证书已安装到 ${TLS_DIR}/"
@@ -273,7 +277,7 @@ issue_cert() {
 # --- Nginx 安装 ---
 install_nginx() {
     if command -v nginx &>/dev/null; then
-        green "Nginx 已安�?
+        green "Nginx 已安装"
         return
     fi
 
@@ -302,7 +306,7 @@ install_nginx() {
 
 # --- 卸载 ---
 uninstall() {
-    yellow "开始卸�?VasmaX..."
+    yellow "开始卸载 VasmaX..."
 
     # 停止服务
     systemctl stop VasmaX 2>/dev/null || true
@@ -313,21 +317,22 @@ uninstall() {
     rm -f "${SERVICE_FILE}"
     rm -f /usr/local/bin/vasmax
 
-    # 删除配置和数据（需确认�?    if [[ "${1:-}" == "--purge" ]]; then
+    # 删除配置和数据（需确认）
+    if [[ "${1:-}" == "--purge" ]]; then
         rm -rf "${CONFIG_DIR}"
         rm -rf "${LOG_DIR}"
         green "配置和数据已清除"
     else
-        yellow "配置保留�?${CONFIG_DIR}，使�?--purge 完全清除"
+        yellow "配置保留在 ${CONFIG_DIR}，使用 --purge 完全清除"
     fi
 
     systemctl daemon-reload
-    green "VasmaX 已卸�?
+    green "VasmaX 已卸载"
     yellow "注意: acme.sh 证书配置未被移除"
-    yellow "如需清理请手动执�? ~/.acme.sh/acme.sh --uninstall"
+    yellow "如需清理请手动执行: ~/.acme.sh/acme.sh --uninstall"
 }
 
-# --- 主菜�?---
+# --- 主菜单 ---
 show_menu() {
     echo ""
     green "VasmaX 部署脚本 v${VERSION}"
@@ -338,11 +343,11 @@ show_menu() {
     echo " 4. 启动服务"
     echo " 5. 停止服务"
     echo " 6. 重启服务"
-    echo " 7. 查看状�?
+    echo " 7. 查看状态"
     echo " 8. 查看日志"
     echo " 9. 申请 TLS 证书"
     echo "10. 安装 Nginx"
-    echo " 0. 退�?
+    echo " 0. 退出"
     echo ""
     read -rp "请选择 [0-10]: " choice
 
@@ -357,9 +362,9 @@ show_menu() {
                 *) uninstall ;;
             esac
             ;;
-        4) systemctl start VasmaX && green "已启�? ;;
-        5) systemctl stop VasmaX && green "已停�? ;;
-        6) systemctl restart VasmaX && green "已重�? ;;
+        4) systemctl start VasmaX && green "已启动" ;;
+        5) systemctl stop VasmaX && green "已停止" ;;
+        6) systemctl restart VasmaX && green "已重启" ;;
         7) systemctl status VasmaX ;;
         8) journalctl -u VasmaX -f --no-pager ;;
         9) cert_menu ;;
@@ -370,8 +375,8 @@ show_menu() {
 }
 
 cert_menu() {
-    read -rp "请输入域�? " domain
-    echo "证书提供�? 1) Let's Encrypt  2) Buypass  3) ZeroSSL"
+    read -rp "请输入域名: " domain
+    echo "证书提供商: 1) Let's Encrypt  2) Buypass  3) ZeroSSL"
     read -rp "选择 [1-3]: " provider_choice
     case "${provider_choice}" in
         1) provider="letsencrypt" ;;
@@ -379,7 +384,7 @@ cert_menu() {
         3) provider="zerossl" ;;
         *) provider="letsencrypt" ;;
     esac
-    echo "验证方式: 1) standalone  2) Cloudflare DNS  3) 阿里�?DNS  4) CF 通配�?
+    echo "验证方式: 1) standalone  2) Cloudflare DNS  3) 阿里云 DNS  4) CF 通配符"
     read -rp "选择 [1-4]: " mode_choice
     case "${mode_choice}" in
         1) mode="standalone" ;;
@@ -418,7 +423,7 @@ do_update() {
 # --- 入口 ---
 main() {
     if [[ $EUID -ne 0 ]]; then
-        red "请使�?root 用户运行此脚�?
+        red "请使用 root 用户运行此脚本"
         exit 1
     fi
 
