@@ -399,6 +399,7 @@ cert_menu() {
 do_install() {
     detect_os
     install_deps
+    install_nginx
     init_dirs
     download_binary
     setup_service
