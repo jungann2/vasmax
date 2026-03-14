@@ -345,10 +345,9 @@ show_menu() {
     echo " 7. 查看状态"
     echo " 8. 查看日志"
     echo " 9. 申请 TLS 证书"
-    echo "10. 安装 Nginx"
     echo " 0. 退出"
     echo ""
-    read -rp "请选择 [0-10]: " choice
+    read -rp "请选择 [0-9]: " choice
 
     case "${choice}" in
         1) do_install ;;
@@ -367,7 +366,6 @@ show_menu() {
         7) systemctl status VasmaX ;;
         8) journalctl -u VasmaX -f --no-pager ;;
         9) cert_menu ;;
-        10) install_nginx ;;
         0) exit 0 ;;
         *) red "无效选择" ;;
     esac
