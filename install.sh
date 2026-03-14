@@ -167,14 +167,6 @@ init_dirs() {
 
     # 创建默认配置（如不存在）
     if [[ ! -f "${CONFIG_FILE}" ]]; then
-        # 询问是否启用设备监控（默认启用）
-        local monitoring_value="true"
-        read -rp "是否启用设备监控? [Y/n]: " monitor_choice
-        case "${monitor_choice}" in
-            [Nn]) monitoring_value="false" ;;
-            *) monitoring_value="true" ;;
-        esac
-
         cat > "${CONFIG_FILE}" << YAML
 standalone: true
 log:
@@ -188,7 +180,7 @@ audit:
 lang: zh
 protocols: []
 core_type: dual
-monitoring_enabled: ${monitoring_value}
+monitoring_enabled: true
 YAML
         chmod 600 "${CONFIG_FILE}"
     fi
