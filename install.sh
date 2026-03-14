@@ -188,7 +188,7 @@ init_dirs() {
     # 配置文件处理
     if [[ -f "${CONFIG_FILE}" ]]; then
         yellow "检测到已有配置文件: ${CONFIG_FILE}"
-        echo "1) 保留当前配置（推荐，新版本兼容旧配置，缺少的新配置项会自动补全默认值）"
+        echo "1) 保留当前配置（推荐，新配置项会自动补全）"
         echo "2) 备份当前配置并重置为默认"
         echo "3) 查看当前配置"
         read -rp "请选择 [1-3]（默认 1）: " config_choice
