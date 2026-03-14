@@ -8,7 +8,7 @@ Xray-core / sing-box 十五合一管理脚本（Go 重构版）
 
 VasmaX（V2ray Agent Service Management Assistant X）是一个基于 Go 语言重构的多协议代理服务管理工具，支持 Xray-core 和 sing-box 双核心，提供 15 种协议组合的一键安装与管理。
 
-支持独立运行和 Xboard 面板托管两种模式。
+支持独立运行和 Xboard2 面板托管两种模式。
 
 ## 支持协议（十五合一）
 
@@ -35,7 +35,7 @@ VasmaX（V2ray Agent Service Management Assistant X）是一个基于 Go 语言�
 
 - 双核心支持：Xray-core + sing-box 同时运行
 - 15 种协议组合一键安装管理
-- Xboard 面板对接：用户同步、流量统计、在线追踪
+- Xboard2 面板对接：用户同步、流量统计、在线追踪
 - 独立模式：无需面板，单机运行
 - 自动 TLS 证书申请与续订（acme.sh）
 - TLS 版本管理：支持设置最低/最高 TLS 版本（1.0 ~ 1.3）
@@ -87,9 +87,9 @@ vasmax
 
 无需面板，直接在服务器上管理协议和用户，适合个人使用。
 
-### Xboard 托管模式
+### Xboard2 托管模式
 
-对接 Xboard 面板，支持多用户管理、流量统计、到期自动停用等功能，适合机场运营。
+对接 Xboard2 面板，支持多用户管理、流量统计、到期自动停用等功能，适合机场运营。
 
 ## 系统要求
 
@@ -107,7 +107,7 @@ vasmax
 1.  安装管理        8.  额外端口管理
 2.  账号管理        9.  ALPN 切换
 3.  分流工具        10. 核心管理
-4.  BT 下载管理     11. Xboard 对接管理
+4.  BT 下载管理     11. Xboard2 对接管理
 5.  域名黑名单      12. TLS 证书管理
 6.  CDN 管理        13. 其他工具
 7.  订阅管理        0.  退出
