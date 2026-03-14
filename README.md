@@ -93,10 +93,13 @@ vasmax
 
 ## 系统要求
 
-- 操作系统：Ubuntu 16+ / Debian 8+ / CentOS 7+ / Alpine
+- 推荐系统：Debian 12 (Bookworm)，Ubuntu 22.04+ / CentOS 7+ / Alpine 也可使用
+- 兼容系统：Ubuntu 16+ / Debian 8+ / CentOS 7+ / Alpine
 - 架构：amd64 / arm64
 - 内存：≥ 128MB
 - 需要 root 权限
+
+> Debian 推荐理由：VasmaX 的 BBR 加速管理直接操作内核参数（`/proc/sys`、`sysctl`），Debian 12 内核 6.1 LTS 原生支持 BBR，且系统干净轻量，无多余组件。Ubuntu 基于 Debian 同样兼容，CentOS/RHEL 需注意内核版本差异。
 
 ## 管理菜单
 
