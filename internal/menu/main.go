@@ -55,7 +55,7 @@ func NewMainMenu(
 		config:    cfg,
 		coreMgr:   coreMgr,
 		logger:    logger,
-		install:   NewInstallMenu(cfg, coreMgr, reg, rbMgr, logger),
+		install:   NewInstallMenu(cfg, coreMgr, reg, rbMgr, nginxMgr, logger),
 		account:   NewAccountMenu(userMgr, subMgr),
 		routing:   NewRoutingMenu(routeMgr, btMgr, blMgr, warpMgr),
 		tools:     NewToolsMenu(cfg, nginxMgr, logger),

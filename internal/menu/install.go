@@ -10,6 +10,7 @@ import (
 
 	"vasmax/internal/config"
 	"vasmax/internal/core"
+	"vasmax/internal/nginx"
 	"vasmax/internal/protocol"
 	"vasmax/internal/rollback"
 	"vasmax/internal/security"
@@ -22,12 +23,13 @@ type InstallMenu struct {
 	coreMgr     *core.Manager
 	registry    *protocol.Registry
 	rollbackMgr *rollback.Manager
+	nginxMgr    *nginx.Manager
 	logger      *logrus.Logger
 }
 
 // NewInstallMenu creates a new install menu.
-func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, rbMgr *rollback.Manager, logger *logrus.Logger) *InstallMenu {
-	return &InstallMenu{config: cfg, coreMgr: coreMgr, registry: reg, rollbackMgr: rbMgr, logger: logger}
+func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, rbMgr *rollback.Manager, nginxMgr *nginx.Manager, logger *logrus.Logger) *InstallMenu {
+	return &InstallMenu{config: cfg, coreMgr: coreMgr, registry: reg, rollbackMgr: rbMgr, nginxMgr: nginxMgr, logger: logger}
 }
 
 // Show displays the installation management menu.
@@ -162,6 +164,9 @@ func (m *InstallMenu) installCombination() {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 	}
 
+	// 自动配置 Nginx 反代（ws/grpc/httpupgrade 协议需要）
+	m.autoConfigNginx(selected, domain)
+
 	// 验证服务启动
 	PrintInfo("等待服务启动...")
 	time.Sleep(3 * time.Second)
@@ -254,4 +259,122 @@ func (m *InstallMenu) uninstallProtocol() {
 	}
 
 	PrintSuccess(fmt.Sprintf("%s 已卸载", name))
+}
+
+// needsNginxProxy 判断协议是否需要 Nginx 反向代理
+// ws/grpc/httpupgrade 类型的非 Reality 协议需要 Nginx 做反代
+func needsNginxProxy(p protocol.Protocol) bool {
+	transport := p.TransportType()
+	name := p.Name()
+	// Reality 协议自己处理 TLS，不需要 Nginx
+	if strings.Contains(name, "reality") {
+		return false
+	}
+	return transport == "ws" || transport == "grpc" || transport == "httpupgrade"
+}
+
+// defaultWSPath 为协议生成默认的 WS/HTTPUpgrade 路径
+func defaultWSPath(p protocol.Protocol) string {
+	// 每个协议用不同路径避免冲突
+	switch p.Name() {
+	case "vless_ws_tls":
+		return "/vlessws"
+	case "vmess_ws_tls":
+		return "/vmessws"
+	case "vmess_httpupgrade_tls":
+		return "/vmesshup"
+	default:
+		return "/" + strings.ReplaceAll(p.Name(), "_", "")
+	}
+}
+
+// defaultGRPCServiceName 为 gRPC 协议生成默认 serviceName
+func defaultGRPCServiceName(p protocol.Protocol) string {
+	switch p.Name() {
+	case "vless_grpc_tls":
+		return "vlessgrpc"
+	case "trojan_grpc_tls":
+		return "trojangrpc"
+	default:
+		return strings.ReplaceAll(p.Name(), "_", "")
+	}
+}
+
+// autoConfigNginx 安装协议后自动配置 Nginx 反向代理
+func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain string) {
+	// 收集需要 Nginx 反代的协议
+	var locations []nginx.ProtocolLocation
+	for _, p := range installed {
+		if !needsNginxProxy(p) {
+			continue
+		}
+		transport := p.TransportType()
+		loc := nginx.ProtocolLocation{
+			Type:        transport,
+			BackendPort: p.DefaultPort(),
+		}
+		if transport == "grpc" {
+			loc.Path = defaultGRPCServiceName(p)
+		} else {
+			loc.Path = defaultWSPath(p)
+		}
+		locations = append(locations, loc)
+	}
+
+	if len(locations) == 0 {
+		return
+	}
+
+	// 需要域名和证书
+	if domain == "" {
+		PrintWarning("未配置域名，跳过 Nginx 自动配置")
+		return
+	}
+
+	certFile := m.config.TLS.CertFile
+	keyFile := m.config.TLS.KeyFile
+	if certFile == "" || keyFile == "" {
+		// 尝试检测证书路径
+		certFile, keyFile = config.DetectCertPath(&m.config.TLS)
+	}
+	if certFile == "" || keyFile == "" {
+		PrintWarning("未找到 TLS 证书，跳过 Nginx 自动配置")
+		PrintInfo("请先通过 TLS 证书管理申请证书，然后重新安装协议")
+		return
+	}
+
+	PrintInfo("正在自动配置 Nginx 反向代理...")
+
+	params := &nginx.NginxParams{
+		Domain:    domain,
+		CertFile:  certFile,
+		KeyFile:   keyFile,
+		Protocols: locations,
+	}
+
+	if err := m.nginxMgr.GenerateConfig(params); err != nil {
+		PrintError(fmt.Sprintf("生成 Nginx 配置失败: %v", err))
+		return
+	}
+
+	// 配置订阅路径
+	if err := m.nginxMgr.SetupSubscribeServer(domain); err != nil {
+		m.logger.WithError(err).Warn("配置订阅路径失败")
+	}
+
+	// 验证并重载 Nginx
+	if err := m.nginxMgr.Reload(); err != nil {
+		PrintError(fmt.Sprintf("Nginx 重载失败: %v", err))
+		PrintInfo("请手动检查 Nginx 配置: nginx -t")
+		return
+	}
+
+	PrintSuccess("Nginx 反向代理已自动配置")
+	for _, loc := range locations {
+		if loc.Type == "grpc" {
+			PrintInfo(fmt.Sprintf("  %s → grpc://127.0.0.1:%d/%s", loc.Type, loc.BackendPort, loc.Path))
+		} else {
+			PrintInfo(fmt.Sprintf("  %s → http://127.0.0.1:%d%s", loc.Type, loc.BackendPort, loc.Path))
+		}
+	}
 }
