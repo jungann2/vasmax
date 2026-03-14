@@ -295,9 +295,45 @@ install_nginx() {
     green "Nginx 已安装并启动"
 }
 
+# --- 卸载 Nginx ---
+uninstall_nginx() {
+    if ! command -v nginx &>/dev/null; then
+        return
+    fi
+
+    echo ""
+    read -rp "是否同时卸载 Nginx? (如有其他站点使用请选否) [y/N]: " nginx_choice
+    case "${nginx_choice}" in
+        [yY]|[yY][eE][sS])
+            yellow "正在卸载 Nginx..."
+            systemctl stop nginx 2>/dev/null || true
+            systemctl disable nginx 2>/dev/null || true
+            case "${OS_TYPE}" in
+                debian|ubuntu)
+                    apt-get purge -y nginx nginx-common nginx-full 2>/dev/null || true
+                    apt-get autoremove -y 2>/dev/null || true
+                    ;;
+                centos|rhel|fedora|rocky|almalinux)
+                    yum remove -y nginx 2>/dev/null || true
+                    ;;
+                alpine)
+                    apk del nginx 2>/dev/null || true
+                    ;;
+            esac
+            green "Nginx 已卸载"
+            ;;
+        *)
+            yellow "保留 Nginx"
+            ;;
+    esac
+}
+
 # --- 卸载 ---
 uninstall() {
     yellow "开始卸载 VasmaX..."
+
+    # 检测系统类型（卸载 Nginx 需要）
+    detect_os
 
     # 停止服务
     systemctl stop VasmaX 2>/dev/null || true
@@ -316,6 +352,9 @@ uninstall() {
     else
         yellow "配置保留在 ${CONFIG_DIR}，使用 --purge 完全清除"
     fi
+
+    # 询问是否卸载 Nginx
+    uninstall_nginx
 
     systemctl daemon-reload
     green "VasmaX 已卸载"
