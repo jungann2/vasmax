@@ -3,6 +3,7 @@ package firewall
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // ufwBackend implements FirewallBackend using ufw.
@@ -18,7 +19,7 @@ func (u *ufwBackend) IsActive() bool {
 	if err != nil {
 		return false
 	}
-	return len(out) > 0 && contains(string(out), "Status: active")
+	return len(out) > 0 && strings.Contains(string(out), "Status: active")
 }
 
 func (u *ufwBackend) AddPort(port int, protocol string) error {

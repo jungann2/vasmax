@@ -191,7 +191,9 @@ func main() {
 		apiClient := api.NewClient(cfg.APIHost, cfg.APIToken, cfg.NodeID, cfg.NodeType, logger)
 		snapshot := trafficCtr.Snapshot()
 		if len(snapshot) > 0 {
-			if err := apiClient.PushTraffic(snapshot); err != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shutdownCancel()
+			if err := apiClient.PushTraffic(shutdownCtx, snapshot); err != nil {
 				logger.WithError(err).Warn("关闭时上报流量失败")
 				trafficCtr.Merge(snapshot)
 			}

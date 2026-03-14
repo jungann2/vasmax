@@ -153,7 +153,7 @@ func (m *PortMenu) closePort() {
 	}
 
 	// 从配置移除
-	m.config.ExtraPorts = append(ports[:idx-1], ports[idx:]...)
+	m.config.ExtraPorts = append(m.config.ExtraPorts[:idx-1], m.config.ExtraPorts[idx:]...)
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return

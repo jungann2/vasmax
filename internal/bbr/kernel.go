@@ -99,13 +99,33 @@ func InstallKernel(target KernelTarget, distro *Distro) error {
 
 func installBBRVanilla(distro *Distro) error {
 	if distro.IsDebian() {
-		// 用 bash -c 确保 shell 展开 $(lsb_release -rs)
-		runApt("update")
-		cmd := exec.Command("bash", "-c", "apt-get install -y linux-generic-hwe-$(lsb_release -rs)")
-		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		if err := runApt("update"); err != nil {
+			return fmt.Errorf("apt update 失败: %w", err)
+		}
+		// Ubuntu 使用 HWE 内核，Debian 及其衍生版使用通用内核镜像
+		// Linux Mint、Pop!_OS 等虽基于 Ubuntu，但版本号不同，HWE 包名不适用
+		if distro.ID != "ubuntu" {
+			// 非 Ubuntu 的 Debian 系：安装最新的通用内核镜像
+			arch := distro.Arch
+			pkg := "linux-image-amd64"
+			if arch == "aarch64" || arch == "arm64" {
+				pkg = "linux-image-arm64"
+			}
+			return runApt("install", "-y", pkg)
+		}
+		// Ubuntu: 使用 HWE 内核
+		ver := distro.Version
+		if ver == "" {
+			// 回退到 lsb_release
+			if out, err := exec.Command("lsb_release", "-rs").Output(); err == nil {
+				ver = strings.TrimSpace(string(out))
+			}
+		}
+		if ver == "" {
+			return fmt.Errorf("无法确定系统版本号，请手动安装 HWE 内核")
+		}
+		pkg := fmt.Sprintf("linux-generic-hwe-%s", ver)
+		return runApt("install", "-y", pkg)
 	}
 	if distro.IsRHEL() {
 		// RHEL 系：安装 elrepo 后安装 mainline 内核
@@ -120,8 +140,11 @@ func installBBRVanilla(distro *Distro) error {
 func installBBRPlus(distro *Distro, newVersion bool) error {
 	// 从 GitHub cx9208/bbrplus 下载预编译包
 	arch := distro.Arch
-	if arch == "" || arch == "x86_64" {
+	switch arch {
+	case "", "x86_64":
 		arch = "amd64"
+	case "aarch64":
+		arch = "arm64"
 	}
 	var url string
 	if newVersion {
@@ -144,7 +167,9 @@ func installZenKernel(distro *Distro) error {
 	if !distro.IsDebian() {
 		return fmt.Errorf("Zen 内核仅支持 Debian/Ubuntu")
 	}
-	runApt("update")
+	if err := runApt("update"); err != nil {
+		return fmt.Errorf("apt update 失败: %w", err)
+	}
 	return runApt("install", "-y", "linux-image-zen")
 }
 
@@ -157,7 +182,9 @@ func installMainlineKernel(distro *Distro, variant string) error {
 		case "stable":
 			return runBashScript(script, "--install", "stable")
 		case "cloud":
-			runApt("update")
+			if err := runApt("update"); err != nil {
+				return fmt.Errorf("apt update 失败: %w", err)
+			}
 			arch := distro.Arch
 			pkg := "linux-image-cloud-amd64"
 			if arch == "aarch64" || arch == "arm64" {
@@ -189,9 +216,9 @@ func installXANMOD(distro *Distro, pkg string) error {
 	if !distro.IsDebian() {
 		return fmt.Errorf("XANMOD 内核仅支持 Debian/Ubuntu")
 	}
-	// 添加 XANMOD APT 仓库
+	// 添加 XANMOD APT 仓库（--yes 允许覆盖已存在的 keyring 文件）
 	steps := [][]string{
-		{"bash", "-c", "wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor -o /usr/share/keyrings/xanmod-archive-keyring.gpg"},
+		{"bash", "-c", "wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor --yes -o /usr/share/keyrings/xanmod-archive-keyring.gpg"},
 		{"bash", "-c", `echo 'deb [signed-by=/usr/share/keyrings/xanmod-archive-keyring.gpg] http://deb.xanmod.org releases main' | tee /etc/apt/sources.list.d/xanmod-release.list`},
 	}
 	for _, step := range steps {
@@ -199,7 +226,9 @@ func installXANMOD(distro *Distro, pkg string) error {
 			return fmt.Errorf("添加 XANMOD 仓库失败: %s", string(out))
 		}
 	}
-	runApt("update")
+	if err := runApt("update"); err != nil {
+		return fmt.Errorf("apt update 失败: %w", err)
+	}
 	return runApt("install", "-y", pkg)
 }
 
@@ -211,6 +240,7 @@ func InstallLotserverAccel() error {
 // InstallBrutal 编译安装 brutal 模块
 func InstallBrutal() error {
 	// 安装编译依赖（用 bash -c 确保 shell 展开 $(uname -r)）
+	installed := false
 	if _, err := exec.LookPath("apt-get"); err == nil {
 		cmd := exec.Command("bash", "-c", "apt-get install -y linux-headers-$(uname -r) build-essential git")
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
@@ -219,21 +249,27 @@ func InstallBrutal() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("安装编译依赖失败: %w", err)
 		}
-	} else if _, err := exec.LookPath("yum"); err == nil {
-		// RHEL 系
-		cmd := exec.Command("bash", "-c", "yum install -y kernel-devel-$(uname -r) gcc make git")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("安装编译依赖失败: %w", err)
-		}
+		installed = true
 	} else if _, err := exec.LookPath("dnf"); err == nil {
+		// dnf 优先于 yum（RHEL 8+/Fedora 上 yum 是 dnf 的符号链接）
 		cmd := exec.Command("bash", "-c", "dnf install -y kernel-devel-$(uname -r) gcc make git")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("安装编译依赖失败: %w", err)
 		}
+		installed = true
+	} else if _, err := exec.LookPath("yum"); err == nil {
+		cmd := exec.Command("bash", "-c", "yum install -y kernel-devel-$(uname -r) gcc make git")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("安装编译依赖失败: %w", err)
+		}
+		installed = true
+	}
+	if !installed {
+		return fmt.Errorf("未找到支持的包管理器（需要 apt-get、dnf 或 yum）")
 	}
 	// 清理可能残留的上次安装目录
 	_ = os.RemoveAll("/tmp/tcp-brutal")
@@ -282,10 +318,14 @@ func DeleteKernels(toDelete []string, distro *Distro) error {
 		return nil
 	}
 	if distro.IsDebian() {
-		args := append([]string{"purge", "-y"}, toDelete...)
+		args := make([]string, 0, 2+len(toDelete))
+		args = append(args, "purge", "-y")
+		args = append(args, toDelete...)
 		return runApt(args...)
 	}
-	args := append([]string{"-e"}, toDelete...)
+	args := make([]string, 0, 1+len(toDelete))
+	args = append(args, "-e")
+	args = append(args, toDelete...)
 	return runCmd("rpm", args...)
 }
 
@@ -297,8 +337,25 @@ func UpdateGrub(distro *Distro) error {
 		}
 		return nil
 	}
-	// RHEL 系
-	if out, err := exec.Command("grub2-mkconfig", "-o", "/boot/grub2/grub.cfg").CombinedOutput(); err != nil {
+	// RHEL 系：检测 UEFI 还是 BIOS 以确定 grub.cfg 路径
+	grubCfg := "/boot/grub2/grub.cfg"
+	if _, err := os.Stat("/sys/firmware/efi"); err == nil {
+		// UEFI 系统
+		efiPaths := []string{
+			"/boot/efi/EFI/centos/grub.cfg",
+			"/boot/efi/EFI/redhat/grub.cfg",
+			"/boot/efi/EFI/rocky/grub.cfg",
+			"/boot/efi/EFI/almalinux/grub.cfg",
+			"/boot/efi/EFI/fedora/grub.cfg",
+		}
+		for _, p := range efiPaths {
+			if _, err := os.Stat(p); err == nil {
+				grubCfg = p
+				break
+			}
+		}
+	}
+	if out, err := exec.Command("grub2-mkconfig", "-o", grubCfg).CombinedOutput(); err != nil {
 		return fmt.Errorf("grub2-mkconfig 失败: %s", string(out))
 	}
 	return nil
@@ -327,8 +384,14 @@ func downloadAndInstallDeb(url string) error {
 		return fmt.Errorf("下载失败: %s", string(out))
 	}
 	defer os.Remove(tmpFile)
+
 	if out, err := exec.Command("dpkg", "-i", tmpFile).CombinedOutput(); err != nil {
-		return fmt.Errorf("安装 deb 包失败: %s", string(out))
+		// dpkg 安装失败时尝试修复依赖
+		fixCmd := exec.Command("apt-get", "install", "-f", "-y")
+		fixCmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		if fixOut, fixErr := fixCmd.CombinedOutput(); fixErr != nil {
+			return fmt.Errorf("安装 deb 包失败: %s\n修复依赖也失败: %s", string(out), string(fixOut))
+		}
 	}
 	return nil
 }
@@ -361,9 +424,18 @@ func installELRepo() error {
 		return fmt.Errorf("导入 ELRepo GPG key 失败: %w", err)
 	}
 	// 安装 ELRepo release 包（根据 RHEL 版本选择）
-	repoURL := "https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm"
-	if out, _ := exec.Command("rpm", "-E", "%{rhel}").Output(); strings.TrimSpace(string(out)) == "7" {
+	rhelVer := "8"
+	if verOut, _ := exec.Command("rpm", "-E", "%{rhel}").Output(); len(verOut) > 0 {
+		rhelVer = strings.TrimSpace(string(verOut))
+	}
+	var repoURL string
+	switch rhelVer {
+	case "7":
 		repoURL = "https://www.elrepo.org/elrepo-release-7.el7.elrepo.noarch.rpm"
+	case "9":
+		repoURL = "https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm"
+	default:
+		repoURL = "https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm"
 	}
 	return runCmd("rpm", "-Uvh", repoURL)
 }

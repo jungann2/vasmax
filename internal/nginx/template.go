@@ -19,8 +19,9 @@ func generateServerBlock(params *NginxParams) string {
 
 	// HTTPS server block
 	b.WriteString("server {\n")
-	b.WriteString("    listen 443 ssl http2;\n")
-	b.WriteString("    listen [::]:443 ssl http2;\n")
+	b.WriteString("    listen 443 ssl;\n")
+	b.WriteString("    listen [::]:443 ssl;\n")
+	b.WriteString("    http2 on;\n")
 	b.WriteString(fmt.Sprintf("    server_name %s;\n\n", params.Domain))
 
 	// TLS settings

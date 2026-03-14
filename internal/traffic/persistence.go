@@ -44,7 +44,7 @@ func (c *Counter) SaveToFile(path string) error {
 		return fmt.Errorf("序列化流量数据失败: %w", err)
 	}
 
-	return security.AtomicWrite(path, b, 0644)
+	return security.AtomicWrite(path, b, 0600)
 }
 
 // LoadFromFile 从文件恢复流量数据

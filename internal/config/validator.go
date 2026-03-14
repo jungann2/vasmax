@@ -69,6 +69,66 @@ func (c *Config) Validate() error {
 		errs = append(errs, "cdn.address: must not be empty when cdn is enabled")
 	}
 
+	// 7. Validate ExtraPorts entries.
+	for i, ep := range c.ExtraPorts {
+		if ep.Port < 1 || ep.Port > 65535 {
+			errs = append(errs, fmt.Sprintf("extra_ports[%d].port: must be 1-65535, got %d", i, ep.Port))
+		}
+		switch ep.Protocol {
+		case "tcp", "udp", "both", "":
+			// valid
+		default:
+			errs = append(errs, fmt.Sprintf("extra_ports[%d].protocol: must be tcp/udp/both, got %q", i, ep.Protocol))
+		}
+	}
+
+	// 8. Validate NodeType if set.
+	if c.NodeType != "" {
+		validNodeTypes := map[string]bool{
+			"v2ray": true, "vmess": true, "vless": true,
+			"trojan": true, "shadowsocks": true,
+			"hysteria": true, "tuic": true, "anytls": true,
+		}
+		if !validNodeTypes[c.NodeType] {
+			errs = append(errs, fmt.Sprintf("node_type: must be one of v2ray/vmess/vless/trojan/shadowsocks/hysteria/tuic, got %q", c.NodeType))
+		}
+	}
+
+	// 9. Validate CoreType if set.
+	if c.CoreType != "" {
+		validCoreTypes := map[string]bool{"xray": true, "singbox": true}
+		if !validCoreTypes[c.CoreType] {
+			errs = append(errs, fmt.Sprintf("core_type: must be xray or singbox, got %q", c.CoreType))
+		}
+	}
+
+	// 10. Validate ALPN mode if set.
+	if c.ALPN.Mode != "" {
+		validALPN := map[string]bool{"h2_http11": true, "h2_only": true, "http11_only": true, "h3_only": true, "all": true}
+		if !validALPN[c.ALPN.Mode] {
+			errs = append(errs, fmt.Sprintf("alpn.mode: must be one of h2_http11/h2_only/http11_only/h3_only/all, got %q", c.ALPN.Mode))
+		}
+	}
+
+	// 11. Validate TLS version range if set.
+	if c.TLS.MinVersion != "" || c.TLS.MaxVersion != "" {
+		tlsVersionOrder := map[string]int{"1.0": 0, "1.1": 1, "1.2": 2, "1.3": 3}
+		validTLSVersions := map[string]bool{"1.0": true, "1.1": true, "1.2": true, "1.3": true}
+		if c.TLS.MinVersion != "" && !validTLSVersions[c.TLS.MinVersion] {
+			errs = append(errs, fmt.Sprintf("tls.min_version: must be one of 1.0/1.1/1.2/1.3, got %q", c.TLS.MinVersion))
+		}
+		if c.TLS.MaxVersion != "" && !validTLSVersions[c.TLS.MaxVersion] {
+			errs = append(errs, fmt.Sprintf("tls.max_version: must be one of 1.0/1.1/1.2/1.3, got %q", c.TLS.MaxVersion))
+		}
+		if c.TLS.MinVersion != "" && c.TLS.MaxVersion != "" {
+			minOrd, minOk := tlsVersionOrder[c.TLS.MinVersion]
+			maxOrd, maxOk := tlsVersionOrder[c.TLS.MaxVersion]
+			if minOk && maxOk && minOrd > maxOrd {
+				errs = append(errs, fmt.Sprintf("tls.min_version %q must not be greater than tls.max_version %q", c.TLS.MinVersion, c.TLS.MaxVersion))
+			}
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  %s", strings.Join(errs, "\n  "))
 	}

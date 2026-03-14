@@ -76,7 +76,7 @@ func (m *MainMenu) Show() {
 		m.printOptions()
 
 		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}
-		choice := ReadChoice(i18n.T("menu.choose"), choices)
+		choice := ReadChoice(i18n.T("menu.select"), choices)
 
 		switch choice {
 		case "1":
@@ -86,11 +86,11 @@ func (m *MainMenu) Show() {
 		case "3":
 			m.routing.Show()
 		case "4":
-			m.routing.Show() // BT 下载管理（RoutingMenu 子项）
+			m.routing.ShowBTMenu()
 		case "5":
-			m.routing.Show() // 域名黑名单（RoutingMenu 子项）
+			m.routing.ShowBlacklistMenu()
 		case "6":
-			m.tools.Show() // CDN 管理（ToolsMenu 子项）
+			m.tools.ShowCDNMenu()
 		case "7":
 			m.subMenu.Show()
 		case "8":

@@ -52,6 +52,7 @@ func LoadOrCreateSalt(baseDir string) (string, error) {
 }
 
 // SubscribeURL 生成完整订阅 URL
-func SubscribeURL(domain, format, emailMd5 string) string {
-	return fmt.Sprintf("https://%s/s/%s/%s", domain, format, emailMd5)
+// 路径格式: /s/{emailMd5}/{format}，与 nginx location /s/ 配置一致
+func SubscribeURL(domain, emailMd5, format string) string {
+	return fmt.Sprintf("https://%s/s/%s/%s", domain, emailMd5, format)
 }

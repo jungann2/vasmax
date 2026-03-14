@@ -91,8 +91,12 @@ func MergeRemote(local []byte, remotes [][]byte, aliases []string) ([]byte, erro
 				continue
 			}
 			// 追加别名后缀到 fragment
-			if alias != "" && strings.Contains(uri, "#") {
-				uri = uri + "_" + alias
+			if alias != "" {
+				if strings.Contains(uri, "#") {
+					uri = uri + "_" + alias
+				} else {
+					uri = uri + "#" + alias
+				}
 			}
 			localURIs = append(localURIs, uri)
 		}

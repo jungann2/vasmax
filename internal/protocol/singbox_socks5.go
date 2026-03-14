@@ -1,8 +1,6 @@
 package protocol
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -71,11 +69,4 @@ func (s *Socks5) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[s
 		"username":    fmt.Sprintf("user_%d", user.ID),
 		"password":    user.UUID,
 	}
-}
-
-// randomHex 生成指定字节数的随机十六进制字符串
-func randomHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }

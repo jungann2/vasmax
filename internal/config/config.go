@@ -118,6 +118,22 @@ type ALPNConfig struct {
 	Mode string `yaml:"mode"` // "h2_http11"（默认）/ "h2_only" / "http11_only" / "h3_only"
 }
 
+// ALPNList 根据 ALPN 配置返回当前 ALPN 列表（供协议生成时使用）
+func (a *ALPNConfig) ALPNList() []string {
+	switch a.Mode {
+	case "h2_only":
+		return []string{"h2"}
+	case "http11_only":
+		return []string{"http/1.1"}
+	case "h3_only":
+		return []string{"h3"}
+	case "all":
+		return []string{"h2", "http/1.1", "h3"}
+	default:
+		return []string{"h2", "http/1.1"}
+	}
+}
+
 // setDefaults fills in default values for fields that are empty.
 func (c *Config) setDefaults() {
 	if c.Log.Level == "" {

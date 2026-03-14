@@ -107,13 +107,16 @@ func ReadChoice(prompt string, validChoices []string) string {
 		valid[c] = true
 	}
 
-	for i := 0; i < MaxRetries; i++ {
+	for range MaxRetries {
 		input := ReadInput(prompt)
 		if valid[input] {
 			return input
 		}
-		if input == "0" || input == "q" || input == "" {
+		if input == "0" || input == "q" {
 			return "0" // Return to parent menu.
+		}
+		if input == "" {
+			continue // Empty input: retry instead of exiting.
 		}
 		PrintError(fmt.Sprintf("无效选择: %s", input))
 	}

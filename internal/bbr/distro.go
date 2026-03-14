@@ -46,9 +46,9 @@ func DetectDistro() (*Distro, error) {
 
 	// 包管理器
 	switch d.ID {
-	case "debian", "ubuntu":
+	case "debian", "ubuntu", "linuxmint", "pop":
 		d.PkgMgr = "apt"
-	case "centos", "rhel":
+	case "centos", "rhel", "rocky", "almalinux", "ol", "scientific":
 		if _, err := exec.LookPath("dnf"); err == nil {
 			d.PkgMgr = "dnf"
 		} else {

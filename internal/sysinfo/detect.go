@@ -79,7 +79,7 @@ func detectPublicIP(urls []string) string {
 		n, _ := resp.Body.Read(buf)
 		resp.Body.Close()
 		ip := strings.TrimSpace(string(buf[:n]))
-		if net.ParseIP(ip) != nil {
+		if net.ParseIP(ip) != nil && ip != "" {
 			return ip
 		}
 	}

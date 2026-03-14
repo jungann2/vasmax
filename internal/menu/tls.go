@@ -435,9 +435,8 @@ func (m *TLSMenu) setTLSVersion() {
 		}
 
 		// 校验：最高版本不能低于最低版本
-		if minVer == "1.2" && maxVer == "1.2" {
-			// 合法：仅允许 1.2
-		} else if minVer > maxVer {
+		tlsOrder := map[string]int{"1.0": 0, "1.1": 1, "1.2": 2, "1.3": 3}
+		if tlsOrder[minVer] > tlsOrder[maxVer] {
 			PrintError("最高版本不能低于最低版本")
 			return
 		}

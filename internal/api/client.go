@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,7 +43,7 @@ func NewClient(baseURL, token string, nodeID int, nodeType string, logger *logru
 // 自动拼接 URL: {baseURL}/api/v1/server/UniProxy/{path}?token=&node_id=&node_type=
 // POST 请求自动设置 Content-Type: application/json，使用 json.Marshal 序列化 raw body
 // HTTPS 通信启用 TLS 证书验证，不设置 InsecureSkipVerify
-func (c *Client) doRequest(method, path string, body []byte) (*http.Response, error) {
+func (c *Client) doRequest(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
 	fullURL := fmt.Sprintf("%s/api/v1/server/UniProxy/%s", c.baseURL, path)
 
 	params := url.Values{}
@@ -56,7 +57,7 @@ func (c *Client) doRequest(method, path string, body []byte) (*http.Response, er
 		bodyReader = bytes.NewReader(body)
 	}
 
-	req, err := http.NewRequest(method, fullURL, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}

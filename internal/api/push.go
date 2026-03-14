@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,7 @@ import (
 // PushTraffic 上报流量数据
 // data 格式: map[user_id][2]int64 -> {"user_id": [upload, download]}
 // 上报原始字节数，Xboard 自动乘以节点 rate 倍率
-func (c *Client) PushTraffic(data map[int][2]int64) error {
+func (c *Client) PushTraffic(ctx context.Context, data map[int][2]int64) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -28,7 +29,7 @@ func (c *Client) PushTraffic(data map[int][2]int64) error {
 	}
 
 	resp, err := doWithRetry(func() (*http.Response, error) {
-		return c.doRequest(http.MethodPost, "push", body)
+		return c.doRequest(ctx, http.MethodPost, "push", body)
 	}, c.logger)
 	if err != nil {
 		return fmt.Errorf("上报流量失败: %w", err)
@@ -47,7 +48,7 @@ func (c *Client) PushTraffic(data map[int][2]int64) error {
 // PushAlive 上报在线用户
 // data 格式: map[user_id][]string -> {"user_id": ["ip1_nodeId", "ip2_nodeId"]}
 // IP 必须附加 "_{node_id}" 后缀
-func (c *Client) PushAlive(data map[int][]string) error {
+func (c *Client) PushAlive(ctx context.Context, data map[int][]string) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -63,7 +64,7 @@ func (c *Client) PushAlive(data map[int][]string) error {
 	}
 
 	resp, err := doWithRetry(func() (*http.Response, error) {
-		return c.doRequest(http.MethodPost, "alive", body)
+		return c.doRequest(ctx, http.MethodPost, "alive", body)
 	}, c.logger)
 	if err != nil {
 		return fmt.Errorf("上报在线数据失败: %w", err)
@@ -82,9 +83,9 @@ func (c *Client) PushAlive(data map[int][]string) error {
 // FetchAliveList 获取全局在线设备数量
 // 返回格式: {"alive": {"user_id": count}} -> map[int]int
 // 仅包含 device_limit > 0 的用户
-func (c *Client) FetchAliveList() (map[int]int, error) {
+func (c *Client) FetchAliveList(ctx context.Context) (map[int]int, error) {
 	resp, err := doWithRetry(func() (*http.Response, error) {
-		return c.doRequest(http.MethodGet, "alivelist", nil)
+		return c.doRequest(ctx, http.MethodGet, "alivelist", nil)
 	}, c.logger)
 	if err != nil {
 		return nil, fmt.Errorf("获取在线设备数失败: %w", err)
@@ -121,14 +122,14 @@ func (c *Client) FetchAliveList() (map[int]int, error) {
 
 // PushStatus 上报节点负载状态
 // 包含 cpu/mem/swap/disk
-func (c *Client) PushStatus(status *NodeStatus) error {
+func (c *Client) PushStatus(ctx context.Context, status *NodeStatus) error {
 	body, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("序列化状态数据失败: %w", err)
 	}
 
 	resp, err := doWithRetry(func() (*http.Response, error) {
-		return c.doRequest(http.MethodPost, "status", body)
+		return c.doRequest(ctx, http.MethodPost, "status", body)
 	}, c.logger)
 	if err != nil {
 		return fmt.Errorf("上报节点状态失败: %w", err)

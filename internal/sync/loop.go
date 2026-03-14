@@ -176,6 +176,8 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 			KeyFile:       l.config.TLS.KeyFile,
 			Users:         apiUsers,
 			Tag:           protoName,
+			Path:          "/vasmax",
+			ServiceName:   "vasmax-grpc",
 			TLSMinVersion: l.config.TLS.MinVersion,
 			TLSMaxVersion: l.config.TLS.MaxVersion,
 		}
@@ -312,7 +314,7 @@ func (l *Loop) pushData(ctx context.Context) error {
 	// 1. 流量上报
 	snapshot := l.trafficCounter.Snapshot()
 	if len(snapshot) > 0 {
-		if err := l.apiClient.PushTraffic(snapshot); err != nil {
+		if err := l.apiClient.PushTraffic(ctx, snapshot); err != nil {
 			// 上报失败，回滚流量数据
 			l.trafficCounter.Merge(snapshot)
 			l.logger.WithError(err).Warn("流量上报失败，已回滚")
@@ -322,7 +324,7 @@ func (l *Loop) pushData(ctx context.Context) error {
 	// 2. 在线用户上报
 	aliveSnapshot := l.aliveTracker.Snapshot()
 	if len(aliveSnapshot) > 0 {
-		if err := l.apiClient.PushAlive(aliveSnapshot); err != nil {
+		if err := l.apiClient.PushAlive(ctx, aliveSnapshot); err != nil {
 			l.logger.WithError(err).Warn("在线用户上报失败")
 		}
 	}
@@ -333,7 +335,7 @@ func (l *Loop) pushData(ctx context.Context) error {
 		if err != nil {
 			l.logger.WithError(err).Warn("采集节点状态失败")
 		} else {
-			if err := l.apiClient.PushStatus(status); err != nil {
+			if err := l.apiClient.PushStatus(ctx, status); err != nil {
 				l.logger.WithError(err).Warn("节点状态上报失败")
 			}
 		}

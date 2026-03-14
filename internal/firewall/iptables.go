@@ -75,8 +75,3 @@ func runCmd(name string, args ...string) error {
 	}
 	return nil
 }
-
-// contains checks if s contains substr (case-insensitive not needed here).
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
-}

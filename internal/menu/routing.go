@@ -19,6 +19,16 @@ func NewRoutingMenu(routeMgr *route.Manager, btMgr *route.BTManager, blMgr *rout
 	return &RoutingMenu{routeMgr: routeMgr, btMgr: btMgr, blMgr: blMgr, warpMgr: warpMgr}
 }
 
+// ShowBTMenu directly shows the BT download management sub-menu.
+func (m *RoutingMenu) ShowBTMenu() {
+	m.btMenu()
+}
+
+// ShowBlacklistMenu directly shows the domain blacklist management sub-menu.
+func (m *RoutingMenu) ShowBlacklistMenu() {
+	m.blacklistMenu()
+}
+
 // Show displays the routing tools menu.
 func (m *RoutingMenu) Show() {
 	for {

@@ -84,17 +84,7 @@ func (m *ALPNMenu) currentModeLabel() string {
 }
 
 // ALPNList 根据配置返回当前 ALPN 列表（供协议生成时使用）
+// Deprecated: 使用 config.ALPNConfig.ALPNList() 代替
 func ALPNList(cfg *config.Config) []string {
-	switch cfg.ALPN.Mode {
-	case "h2_only":
-		return []string{"h2"}
-	case "http11_only":
-		return []string{"http/1.1"}
-	case "h3_only":
-		return []string{"h3"}
-	case "all":
-		return []string{"h2", "http/1.1", "h3"}
-	default:
-		return []string{"h2", "http/1.1"}
-	}
+	return cfg.ALPN.ALPNList()
 }

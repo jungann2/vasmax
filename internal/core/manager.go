@@ -208,7 +208,7 @@ func backupFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path+".bak", data, 0755)
+	return os.WriteFile(path+".bak", data, 0600)
 }
 
 func restoreFile(path string) error {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -56,10 +57,17 @@ func ApplyOptimize(newScheme bool) error {
 		}
 	}
 
+	// 收集 key 并排序，确保配置文件内容稳定可预测
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var sb strings.Builder
 	sb.WriteString("# vasmax 系统配置优化\n")
-	for k, v := range params {
-		sb.WriteString(fmt.Sprintf("%s=%s\n", k, v))
+	for _, k := range keys {
+		sb.WriteString(fmt.Sprintf("%s=%s\n", k, params[k]))
 	}
 
 	if err := os.WriteFile(SysctlOptConf, []byte(sb.String()), 0644); err != nil {
@@ -82,7 +90,8 @@ func SetECN(enable bool) error {
 	if err := exec.Command("sysctl", "-w", fmt.Sprintf("net.ipv4.tcp_ecn=%s", val)).Run(); err != nil {
 		return fmt.Errorf("设置 ECN 失败: %w", err)
 	}
-	// ECN 属于系统配置，持久化到 optimize 配置文件，避免被 DisableAll 误删
+	// ECN 持久化到 optimize 配置文件
+	// 注意：DisableAll 会删除此文件，ECN 设置也会被一并清除
 	return appendSysctlParam(SysctlOptConf, "net.ipv4.tcp_ecn", val)
 }
 
@@ -92,9 +101,19 @@ func SetIPv6(enable bool) error {
 		// 删除禁用配置
 		_ = os.Remove(SysctlIPv6Conf)
 		// 立即开启
-		_ = exec.Command("sysctl", "-w", "net.ipv6.conf.all.disable_ipv6=0").Run()
-		_ = exec.Command("sysctl", "-w", "net.ipv6.conf.default.disable_ipv6=0").Run()
-		_ = exec.Command("sysctl", "-w", "net.ipv6.conf.lo.disable_ipv6=0").Run()
+		var errs []string
+		if err := exec.Command("sysctl", "-w", "net.ipv6.conf.all.disable_ipv6=0").Run(); err != nil {
+			errs = append(errs, fmt.Sprintf("conf.all: %v", err))
+		}
+		if err := exec.Command("sysctl", "-w", "net.ipv6.conf.default.disable_ipv6=0").Run(); err != nil {
+			errs = append(errs, fmt.Sprintf("conf.default: %v", err))
+		}
+		if err := exec.Command("sysctl", "-w", "net.ipv6.conf.lo.disable_ipv6=0").Run(); err != nil {
+			errs = append(errs, fmt.Sprintf("conf.lo: %v", err))
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("开启 IPv6 部分失败: %s", strings.Join(errs, "; "))
+		}
 	} else {
 		content := "net.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\nnet.ipv6.conf.lo.disable_ipv6=1\n"
 		if err := os.WriteFile(SysctlIPv6Conf, []byte(content), 0644); err != nil {
@@ -118,8 +137,14 @@ func MergeSysctl() error {
 // appendSysctlParam 在配置文件中追加或更新一个参数
 func appendSysctlParam(file, key, val string) error {
 	data, _ := os.ReadFile(file)
-	lines := strings.Split(string(data), "\n")
+	content := strings.TrimSpace(string(data))
 
+	if content == "" {
+		// 文件不存在或为空，直接写入
+		return os.WriteFile(file, []byte(fmt.Sprintf("%s=%s\n", key, val)), 0644)
+	}
+
+	lines := strings.Split(content, "\n")
 	found := false
 	for i, line := range lines {
 		if strings.HasPrefix(line, key+"=") || strings.HasPrefix(line, key+" =") {
@@ -132,5 +157,5 @@ func appendSysctlParam(file, key, val string) error {
 		lines = append(lines, fmt.Sprintf("%s=%s", key, val))
 	}
 
-	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0644)
+	return os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }

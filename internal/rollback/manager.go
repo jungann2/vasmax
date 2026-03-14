@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 	"vasmax/internal/security"
 
@@ -45,10 +46,18 @@ func (m *Manager) CreateSnapshot() (*Snapshot, error) {
 
 	// 记录核心版本
 	if output, err := exec.Command("/usr/local/xray-core/xray", "version").Output(); err == nil {
-		snap.CoreVersions["xray"] = string(output[:min(len(output), 50)])
+		ver := strings.TrimSpace(string(output))
+		if len(ver) > 50 {
+			ver = ver[:50]
+		}
+		snap.CoreVersions["xray"] = ver
 	}
 	if output, err := exec.Command("/usr/local/sing-box/sing-box", "version").Output(); err == nil {
-		snap.CoreVersions["singbox"] = string(output[:min(len(output), 50)])
+		ver := strings.TrimSpace(string(output))
+		if len(ver) > 50 {
+			ver = ver[:50]
+		}
+		snap.CoreVersions["singbox"] = ver
 	}
 
 	// 备份配置文件

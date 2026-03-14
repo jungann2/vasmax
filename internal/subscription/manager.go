@@ -102,9 +102,11 @@ func (m *Manager) GenerateForUser(u *user.UserEntry) error {
 // buildServerInfo 构建服务器连接信息
 func (m *Manager) buildServerInfo() *protocol.ServerInfo {
 	info := &protocol.ServerInfo{
-		Host:   m.config.TLS.Domain,
-		Port:   443,
-		Domain: m.config.TLS.Domain,
+		Host:        m.config.TLS.Domain,
+		Port:        443,
+		Domain:      m.config.TLS.Domain,
+		Path:        "/vasmax",
+		ServiceName: "vasmax-grpc",
 	}
 	if m.config.CDN.Enabled && m.config.CDN.Address != "" {
 		info.CDNHost = m.config.CDN.Address

@@ -24,6 +24,11 @@ func NewToolsMenu(cfg *config.Config, nginxMgr *nginx.Manager, logger *logrus.Lo
 	return &ToolsMenu{config: cfg, nginxMgr: nginxMgr, logger: logger}
 }
 
+// ShowCDNMenu directly shows the CDN management sub-menu.
+func (m *ToolsMenu) ShowCDNMenu() {
+	m.cdnMenu()
+}
+
 // Show displays the tools menu.
 func (m *ToolsMenu) Show() {
 	for {

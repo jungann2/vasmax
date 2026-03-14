@@ -102,6 +102,13 @@ func (m *AccountMenu) removeUser() {
 	}
 
 	PrintSuccess(fmt.Sprintf("用户 %s 已删除", target.Email))
+
+	// 重新生成订阅（移除已删除用户的订阅文件）
+	if m.subMgr != nil {
+		if err := m.subMgr.GenerateAll(); err != nil {
+			PrintWarning(fmt.Sprintf("重新生成订阅失败: %v", err))
+		}
+	}
 }
 
 func (m *AccountMenu) listUsers() {

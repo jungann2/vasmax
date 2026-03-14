@@ -64,6 +64,20 @@ func SetCC(mode CCMode) error {
 		_ = exec.Command("modprobe", "sch_"+mode.Qdisc).Run()
 	}
 
+	// 检查目标 CC 算法是否可用
+	available := AvailableCC()
+	found := false
+	for _, cc := range available {
+		if cc == mode.CC {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("当前内核不支持 %s 算法（可用: %s），可能需要先安装对应内核",
+			mode.CC, strings.Join(available, ", "))
+	}
+
 	// 构建配置内容
 	var lines []string
 	if mode.Qdisc != "" {
@@ -85,16 +99,19 @@ func SetCC(mode CCMode) error {
 }
 
 // DisableAll 卸载全部加速配置，恢复默认 cubic
+// 注意：此操作会同时删除 BBR 配置和系统优化配置（包括 ECN 设置）
 func DisableAll() error {
 	// 删除所有 vasmax sysctl 配置文件
 	_ = os.Remove(SysctlBBRConf)
 	_ = os.Remove(SysctlOptConf)
 	_ = os.Remove(SysctlIPv6Conf)
 
-	// 立即恢复 cubic
+	// 立即恢复 cubic 和默认 qdisc
 	if err := exec.Command("sysctl", "-w", "net.ipv4.tcp_congestion_control=cubic").Run(); err != nil {
 		return fmt.Errorf("恢复 cubic 失败: %w", err)
 	}
+	// fq_codel 是大多数现代 Linux 发行版的默认 qdisc
+	_ = exec.Command("sysctl", "-w", "net.core.default_qdisc=fq_codel").Run()
 
 	// 重新加载所有 sysctl
 	return ReloadSysctl()
@@ -117,10 +134,16 @@ func EditSysctlFile() error {
 		}
 	}
 
-	// 优先使用 nano，其次 vi
-	editor := "nano"
-	if _, err := exec.LookPath("nano"); err != nil {
-		editor = "vi"
+	// 按优先级查找可用编辑器
+	editor := ""
+	for _, e := range []string{"nano", "vi", "vim"} {
+		if _, err := exec.LookPath(e); err == nil {
+			editor = e
+			break
+		}
+	}
+	if editor == "" {
+		return fmt.Errorf("未找到可用的文本编辑器（需要 nano、vi 或 vim）")
 	}
 
 	cmd := exec.Command(editor, SysctlBBRConf)
