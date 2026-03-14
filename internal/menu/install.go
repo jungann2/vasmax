@@ -2,19 +2,25 @@ package menu
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
+	"vasmax/internal/api"
 	"vasmax/internal/config"
 	"vasmax/internal/core"
 	"vasmax/internal/nginx"
 	"vasmax/internal/protocol"
 	"vasmax/internal/rollback"
 	"vasmax/internal/security"
+	"vasmax/internal/subscription"
 	"vasmax/internal/sysinfo"
+	"vasmax/internal/user"
 )
 
 // InstallMenu handles protocol installation management.
@@ -24,12 +30,14 @@ type InstallMenu struct {
 	registry    *protocol.Registry
 	rollbackMgr *rollback.Manager
 	nginxMgr    *nginx.Manager
+	userMgr     *user.Manager
+	subMgr      *subscription.Manager
 	logger      *logrus.Logger
 }
 
 // NewInstallMenu creates a new install menu.
-func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, rbMgr *rollback.Manager, nginxMgr *nginx.Manager, logger *logrus.Logger) *InstallMenu {
-	return &InstallMenu{config: cfg, coreMgr: coreMgr, registry: reg, rollbackMgr: rbMgr, nginxMgr: nginxMgr, logger: logger}
+func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, rbMgr *rollback.Manager, nginxMgr *nginx.Manager, userMgr *user.Manager, subMgr *subscription.Manager, logger *logrus.Logger) *InstallMenu {
+	return &InstallMenu{config: cfg, coreMgr: coreMgr, registry: reg, rollbackMgr: rbMgr, nginxMgr: nginxMgr, userMgr: userMgr, subMgr: subMgr, logger: logger}
 }
 
 // Show displays the installation management menu.
@@ -189,9 +197,9 @@ func (m *InstallMenu) installCombination() {
 
 func (m *InstallMenu) installReality() {
 	PrintTitle("一键 Reality 安装（无域名）")
-	PrintInfo("将自动生成 X25519 密钥对和 shortId")
+	PrintInfo("将自动生成 X25519 密钥对、shortId 和默认用户")
 
-	// 安装 VLESS+Reality+Vision
+	// 1. 安装 Xray-core
 	ctx := context.Background()
 	status := m.coreMgr.GetStatus()
 	if cs, ok := status["xray"]; !ok || !cs.Installed {
@@ -200,8 +208,41 @@ func (m *InstallMenu) installReality() {
 			PrintError(fmt.Sprintf("安装 Xray-core 失败: %v", err))
 			return
 		}
+		PrintSuccess("Xray-core 安装完成")
+	} else {
+		PrintInfo("Xray-core 已安装，跳过")
 	}
 
+	// 2. 生成 X25519 密钥对（如果还没有）
+	if m.config.Reality.PrivateKey == "" {
+		PrintInfo("正在生成 X25519 密钥对...")
+		keyPair, err := security.GenerateX25519KeyPair()
+		if err != nil {
+			PrintError(fmt.Sprintf("生成密钥对失败: %v", err))
+			return
+		}
+		m.config.Reality.PrivateKey = keyPair.PrivateKey
+		m.config.Reality.PublicKey = keyPair.PublicKey
+		PrintSuccess("X25519 密钥对已生成")
+	}
+
+	// 3. 生成 ShortID（如果还没有）
+	if m.config.Reality.ShortID == "" {
+		shortID, err := security.GenerateShortID()
+		if err != nil {
+			PrintError(fmt.Sprintf("生成 ShortID 失败: %v", err))
+			return
+		}
+		m.config.Reality.ShortID = shortID
+	}
+
+	// 4. 设置默认 Reality dest 和 serverName（如果还没有）
+	if m.config.Reality.Dest == "" {
+		m.config.Reality.Dest = "www.microsoft.com:443"
+		m.config.Reality.ServerName = "www.microsoft.com"
+	}
+
+	// 5. 记录协议
 	found := false
 	for _, p := range m.config.Protocols {
 		if p == "vless_reality_vision" {
@@ -213,11 +254,139 @@ func (m *InstallMenu) installReality() {
 		m.config.Protocols = append(m.config.Protocols, "vless_reality_vision")
 	}
 
-	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
-		PrintError(fmt.Sprintf("保存配置失败: %v", err))
+	// 6. 自动创建默认用户（如果没有用户）
+	users := m.userMgr.GetAllUsers()
+	if len(users) == 0 {
+		PrintInfo("正在创建默认用户...")
+		uuid := generateUUID()
+		email := fmt.Sprintf("user_%s", uuid[:8])
+		if err := m.userMgr.AddLocalUser(uuid, email); err != nil {
+			PrintError(fmt.Sprintf("创建用户失败: %v", err))
+			return
+		}
+		PrintSuccess(fmt.Sprintf("默认用户已创建: %s", uuid))
+		users = m.userMgr.GetAllUsers()
 	}
 
+	// 7. 生成 Xray inbound 配置文件
+	PrintInfo("正在生成 Xray 配置...")
+	p, ok := m.registry.Get("vless_reality_vision")
+	if !ok {
+		PrintError("协议 vless_reality_vision 未注册")
+		return
+	}
+
+	apiUsers := make([]*api.User, 0, len(users))
+	for _, u := range users {
+		apiUsers = append(apiUsers, u.ToAPIUser())
+	}
+
+	params := &protocol.InboundParams{
+		Port:    443,
+		Users:   apiUsers,
+		Tag:     "vless_reality_vision",
+		Reality: &m.config.Reality,
+	}
+
+	inboundJSON, err := p.GenerateInbound(params)
+	if err != nil {
+		PrintError(fmt.Sprintf("生成入站配置失败: %v", err))
+		return
+	}
+
+	wrapper := map[string]interface{}{
+		"inbounds": []json.RawMessage{inboundJSON},
+	}
+	confPath := filepath.Join(m.config.Paths.XrayConf, "05_vless_reality_vision_inbounds.json")
+	if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
+		PrintError(fmt.Sprintf("写入配置文件失败: %v", err))
+		return
+	}
+	PrintSuccess("Xray 配置已生成")
+
+	// 8. 保存配置
+	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		PrintError(fmt.Sprintf("保存配置失败: %v", err))
+		return
+	}
+
+	// 9. 启动 Xray
+	PrintInfo("正在启动 Xray...")
+	if err := m.coreMgr.RestartXray(); err != nil {
+		PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
+	} else {
+		time.Sleep(2 * time.Second)
+		newStatus := m.coreMgr.GetStatus()
+		if xs, ok := newStatus["xray"]; ok && xs.Running {
+			PrintSuccess("Xray 运行正常")
+		} else {
+			PrintWarning("Xray 未运行，请检查日志")
+		}
+	}
+
+	// 10. 生成订阅
+	if m.subMgr != nil {
+		_ = m.subMgr.GenerateAll()
+	}
+
+	// 11. 显示安装结果和分享链接
 	PrintSuccess("Reality 安装完成")
+	fmt.Println()
+	m.showRealityInfo(users)
+}
+
+// showRealityInfo 显示 Reality 配置信息和分享链接
+func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
+	PrintTitle("连接信息")
+
+	// 获取服务器 IP
+	serverIP := getServerIP()
+
+	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
+	PrintInfo(fmt.Sprintf("端口: 443"))
+	PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
+	PrintInfo(fmt.Sprintf("PublicKey: %s", m.config.Reality.PublicKey))
+	PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
+	fmt.Println()
+
+	p, ok := m.registry.Get("vless_reality_vision")
+	if !ok {
+		return
+	}
+
+	serverInfo := &protocol.ServerInfo{
+		Host:    serverIP,
+		Port:    443,
+		Reality: &m.config.Reality,
+	}
+
+	for _, u := range users {
+		apiUser := u.ToAPIUser()
+		uri := p.GenerateURI(apiUser, serverInfo)
+
+		PrintSeparator()
+		PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+		PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
+		fmt.Println()
+		PrintInfo("分享链接:")
+		fmt.Printf("  %s\n", uri)
+		fmt.Println()
+		PrintInfo("二维码:")
+		fmt.Println(subscription.GenerateTerminalQR(uri))
+	}
+}
+
+// getServerIP 获取服务器公网 IP
+func getServerIP() string {
+	// 尝试通过出站连接获取本机 IP
+	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 3*time.Second)
+	if err == nil {
+		defer conn.Close()
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			return addr.IP.String()
+		}
+	}
+	return "YOUR_SERVER_IP"
 }
 
 func (m *InstallMenu) showInstalled() {
