@@ -75,6 +75,8 @@ func (m *InstallMenu) installCombination() {
 	}
 
 	fmt.Println()
+	PrintOptionStr("0", "返回上级菜单")
+	fmt.Println()
 	input := ReadInput("请输入要安装的协议编号（空格/逗号分隔，如 1,3,5）")
 	if input == "" || input == "0" {
 		return
