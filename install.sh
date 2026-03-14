@@ -4,7 +4,7 @@ set -euo pipefail
 # VasmaX 部署脚本
 # 功能：系统检测、依赖安装、Go 二进制下载与校验、systemd 服务配置、
 #       TLS 证书管理（acme.sh）、Nginx 安装、卸载清理
-readonly VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.0.0"
 readonly BINARY_NAME="VasmaX"
 readonly INSTALL_PATH="/usr/local/bin/${BINARY_NAME}"
 readonly CONFIG_DIR="/etc/vasmax"
@@ -22,10 +22,9 @@ yellow() { echo -e "\033[33m$1\033[0m"; }
 # --- 系统检测 ---
 detect_os() {
     if [[ -f /etc/os-release ]]; then
-        # shellcheck source=/dev/null
-        source /etc/os-release
-        OS_TYPE="${ID}"
-        OS_VERSION="${VERSION_ID:-}"
+        # 用 grep 提取，避免 source 与脚本 readonly 变量冲突
+        OS_TYPE="$(grep -oP '^ID=\K\S+' /etc/os-release | tr -d '"')"
+        OS_VERSION="$(grep -oP '^VERSION_ID=\K\S+' /etc/os-release 2>/dev/null | tr -d '"' || echo "")"
     elif command -v lsb_release &>/dev/null; then
         OS_TYPE="$(lsb_release -si | tr '[:upper:]' '[:lower:]')"
     else
@@ -335,7 +334,7 @@ uninstall() {
 # --- 主菜单 ---
 show_menu() {
     echo ""
-    green "VasmaX 部署脚本 v${VERSION}"
+    green "VasmaX 部署脚本 v${SCRIPT_VERSION}"
     echo "─────────────────────────────"
     echo " 1. 安装 VasmaX"
     echo " 2. 更新 VasmaX"
