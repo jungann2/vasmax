@@ -156,18 +156,9 @@ ALIAS
     green "systemd 服务已配置"
 }
 
-# --- 初始化目录 ---
-init_dirs() {
-    mkdir -p "${CONFIG_DIR}" "${CONFIG_DIR}/xray/conf" "${CONFIG_DIR}/sing-box/conf/config"
-    mkdir -p "${CONFIG_DIR}/subscribe" "${CONFIG_DIR}/subscribe_local" "${CONFIG_DIR}/subscribe_remote"
-    mkdir -p "${CONFIG_DIR}/cache" "${CONFIG_DIR}/tls"
-    mkdir -p "${LOG_DIR}"
-    chmod 700 "${CONFIG_DIR}"
-    chmod 700 "${TLS_DIR}"
-
-    # 创建默认配置（如不存在）
-    if [[ ! -f "${CONFIG_FILE}" ]]; then
-        cat > "${CONFIG_FILE}" << YAML
+# --- 写入默认配置 ---
+write_default_config() {
+    cat > "${CONFIG_FILE}" << YAML
 standalone: true
 log:
   level: info
@@ -182,7 +173,57 @@ protocols: []
 core_type: dual
 monitoring_enabled: true
 YAML
-        chmod 600 "${CONFIG_FILE}"
+    chmod 600 "${CONFIG_FILE}"
+}
+
+# --- 初始化目录 ---
+init_dirs() {
+    mkdir -p "${CONFIG_DIR}" "${CONFIG_DIR}/xray/conf" "${CONFIG_DIR}/sing-box/conf/config"
+    mkdir -p "${CONFIG_DIR}/subscribe" "${CONFIG_DIR}/subscribe_local" "${CONFIG_DIR}/subscribe_remote"
+    mkdir -p "${CONFIG_DIR}/cache" "${CONFIG_DIR}/tls"
+    mkdir -p "${LOG_DIR}"
+    chmod 700 "${CONFIG_DIR}"
+    chmod 700 "${TLS_DIR}"
+
+    # 配置文件处理
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        yellow "检测到已有配置文件: ${CONFIG_FILE}"
+        echo "1) 保留当前配置（推荐）"
+        echo "2) 备份当前配置并重置为默认"
+        echo "3) 查看当前配置"
+        read -rp "请选择 [1-3]（默认 1）: " config_choice
+        case "${config_choice}" in
+            2)
+                local backup_file="${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+                cp "${CONFIG_FILE}" "${backup_file}"
+                green "已备份到 ${backup_file}"
+                write_default_config
+                green "配置已重置为默认"
+                ;;
+            3)
+                echo "─────────────────────────────"
+                cat "${CONFIG_FILE}"
+                echo "─────────────────────────────"
+                read -rp "是否重置为默认配置? [y/N]: " reset_choice
+                case "${reset_choice}" in
+                    [yY]|[yY][eE][sS])
+                        local backup_file="${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+                        cp "${CONFIG_FILE}" "${backup_file}"
+                        green "已备份到 ${backup_file}"
+                        write_default_config
+                        green "配置已重置为默认"
+                        ;;
+                    *)
+                        green "保留当前配置"
+                        ;;
+                esac
+                ;;
+            *)
+                green "保留当前配置"
+                ;;
+        esac
+    else
+        write_default_config
     fi
 }
 
