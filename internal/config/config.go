@@ -96,6 +96,7 @@ type RealityConfig struct {
 	ShortID    string `yaml:"short_id"`
 	Dest       string `yaml:"dest"`
 	ServerName string `yaml:"server_name"`
+	Port       int    `yaml:"port"` // Reality 监听端口，默认 443，阿里云等用 8443
 }
 
 // PathsConfig holds file system path settings for various components.
@@ -117,6 +118,14 @@ type ExtraPort struct {
 // ALPNConfig 全局 ALPN 设置
 type ALPNConfig struct {
 	Mode string `yaml:"mode"` // "h2_http11"（默认）/ "h2_only" / "http11_only" / "h3_only"
+}
+
+// EffectivePort 返回 Reality 有效端口（默认 443）
+func (r *RealityConfig) EffectivePort() int {
+	if r.Port > 0 {
+		return r.Port
+	}
+	return 443
 }
 
 // ALPNList 根据 ALPN 配置返回当前 ALPN 列表（供协议生成时使用）

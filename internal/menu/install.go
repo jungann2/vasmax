@@ -284,6 +284,14 @@ func (m *InstallMenu) installReality() {
 
 	PrintInfo("将自动生成 X25519 密钥对、ShortID 和默认用户")
 
+	// 0. 询问是否使用阿里云主机（443 端口被拦截，需要用非标准端口）
+	realityPort := 443
+	if Confirm("是否使用阿里云主机？（阿里云 443 端口有限制，将自动使用 8443 端口）") {
+		realityPort = 8443
+		PrintInfo("已设置 Reality 端口为 8443（阿里云兼容模式）")
+	}
+	m.config.Reality.Port = realityPort
+
 	// 1. 安装 Xray-core
 	ctx := context.Background()
 	status := m.coreMgr.GetStatus()
@@ -369,10 +377,15 @@ func (m *InstallMenu) installReality() {
 
 	for _, p := range selected {
 		params := &protocol.InboundParams{
-			Port:    p.DefaultPort(),
+			Port:    m.config.Reality.EffectivePort(),
 			Users:   apiUsers,
 			Tag:     p.Name(),
 			Reality: &m.config.Reality,
+		}
+
+		// 非 Reality 协议使用自己的默认端口
+		if !strings.Contains(p.Name(), "reality") {
+			params.Port = p.DefaultPort()
 		}
 
 		inboundJSON, err := p.GenerateInbound(params)
@@ -439,7 +452,7 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 	serverIP := getServerIP()
 
 	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
-	PrintInfo("端口: 443")
+	PrintInfo(fmt.Sprintf("端口: %d", m.config.Reality.EffectivePort()))
 	PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
 	PrintInfo(fmt.Sprintf("PublicKey: %s", m.config.Reality.PublicKey))
 	PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
@@ -452,7 +465,7 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 
 	serverInfo := &protocol.ServerInfo{
 		Host:    serverIP,
-		Port:    443,
+		Port:    m.config.Reality.EffectivePort(),
 		Reality: &m.config.Reality,
 	}
 
@@ -518,6 +531,7 @@ func (m *InstallMenu) showRealityMenu() {
 		PrintTitle("Reality 管理")
 		PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
 		PrintInfo(fmt.Sprintf("Dest: %s", m.config.Reality.Dest))
+		PrintInfo(fmt.Sprintf("端口: %d", m.config.Reality.EffectivePort()))
 		PrintSeparator()
 		PrintOption(1, "修改伪装域名")
 		PrintOption(2, "查看密钥和连接信息")
@@ -633,7 +647,7 @@ func (m *InstallMenu) showInstalled() {
 		}
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
-			info.Port = 443
+			info.Port = m.config.Reality.EffectivePort()
 		}
 
 		fmt.Println()
