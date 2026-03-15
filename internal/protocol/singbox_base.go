@@ -20,10 +20,6 @@ func GenerateSingBoxBaseOutbound(confDir string) error {
 				"type": "block",
 				"tag":  "block",
 			},
-			{
-				"type": "dns",
-				"tag":  "dns-out",
-			},
 		},
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
