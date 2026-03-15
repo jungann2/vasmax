@@ -114,9 +114,9 @@ func (r *Registry) ListAll() []Protocol {
 
 // domainOrder 绑定域名安装的固定排序（推荐 → 稳定 → 一般 → 不安全）
 var domainOrder = []string{
+	"anytls",
 	"vless_ws_tls",
 	"vless_tcp_tls_vision",
-	"anytls",
 	"hysteria2",
 	"tuic",
 	"vless_grpc_tls",

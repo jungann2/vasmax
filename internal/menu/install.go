@@ -999,7 +999,7 @@ func protocolLabel(p protocol.Protocol) string {
 	case "tuic":
 		return "(" + core + " TUIC)"
 	case "anytls":
-		return "(" + core + " AnyTLS)"
+		return "(" + core + " AnyTLS 推荐)"
 	case "naive":
 		return "(" + core + " NaïveProxy)"
 	case "socks5":
