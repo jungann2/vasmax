@@ -97,7 +97,7 @@ func (m *InstallMenu) installCombination() {
 				break
 			}
 		}
-		PrintOption(i+1, fmt.Sprintf("%-30s (%s)%s", p.Name(), p.CoreType(), installed))
+		PrintOption(i+1, fmt.Sprintf("%-30s %s%s", p.Name(), protocolLabel(p), installed))
 	}
 
 	fmt.Println()
@@ -250,7 +250,7 @@ func (m *InstallMenu) installReality() {
 				break
 			}
 		}
-		PrintOption(i+1, fmt.Sprintf("%-30s (%s)%s", p.Name(), p.CoreType(), installed))
+		PrintOption(i+1, fmt.Sprintf("%-30s %s%s", p.Name(), protocolLabel(p), installed))
 	}
 
 	fmt.Println()
@@ -595,6 +595,47 @@ func (m *InstallMenu) uninstallProtocol() {
 	}
 
 	PrintSuccess(fmt.Sprintf("%s 已卸载", name))
+}
+
+// protocolLabel 生成协议的描述标签
+func protocolLabel(p protocol.Protocol) string {
+	name := p.Name()
+	core := p.CoreType()
+
+	switch name {
+	case "vless_reality_vision":
+		return "(" + core + " Reality Vision 推荐)"
+	case "vless_reality_grpc":
+		return "(" + core + " Reality gRPC)"
+	case "vless_reality_xhttp":
+		return "(" + core + " Reality XHTTP)"
+	case "vless_ws_tls":
+		return "(" + core + " VLESS WebSocket 推荐)"
+	case "vless_tcp_tls_vision":
+		return "(" + core + " VLESS TCP Vision)"
+	case "vless_grpc_tls":
+		return "(" + core + " VLESS gRPC)"
+	case "vmess_ws_tls":
+		return "(" + core + " VMess WebSocket)"
+	case "vmess_httpupgrade_tls":
+		return "(" + core + " VMess HTTPUpgrade)"
+	case "trojan_tcp_tls":
+		return "(" + core + " Trojan TCP)"
+	case "trojan_grpc_tls":
+		return "(" + core + " Trojan gRPC)"
+	case "hysteria2":
+		return "(" + core + " Hysteria2)"
+	case "tuic":
+		return "(" + core + " TUIC)"
+	case "anytls":
+		return "(" + core + " AnyTLS)"
+	case "naive":
+		return "(" + core + " NaïveProxy)"
+	case "socks5":
+		return "(" + core + " SOCKS5)"
+	default:
+		return "(" + core + ")"
+	}
 }
 
 // needsNginxProxy 判断协议是否需要 Nginx 反向代理
