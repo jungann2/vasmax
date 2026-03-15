@@ -112,6 +112,62 @@ func (r *Registry) ListAll() []Protocol {
 	return result
 }
 
+// domainOrder 绑定域名安装的固定排序（推荐 → 稳定 → 一般 → 不安全）
+var domainOrder = []string{
+	"vless_ws_tls",
+	"vless_tcp_tls_vision",
+	"anytls",
+	"hysteria2",
+	"tuic",
+	"vless_grpc_tls",
+	"vmess_ws_tls",
+	"vmess_httpupgrade_tls",
+	"trojan_tcp_tls",
+	"trojan_grpc_tls",
+	"naive",
+	"vless_reality_vision",
+	"vless_reality_grpc",
+	"vless_reality_xhttp",
+	"socks5",
+}
+
+// noDomainOrder 无域名安装的固定排序
+var noDomainOrder = []string{
+	"vless_reality_vision",
+	"anytls",
+	"hysteria2",
+	"tuic",
+	"vless_reality_grpc",
+	"vless_reality_xhttp",
+	"socks5",
+}
+
+// ListAllOrdered 按固定顺序列出所有协议（绑定域名安装用）
+func (r *Registry) ListAllOrdered() []Protocol {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]Protocol, 0, len(r.protocols))
+	for _, name := range domainOrder {
+		if p, ok := r.protocols[name]; ok {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// ListNoDomainOrdered 按固定顺序列出无域名协议
+func (r *Registry) ListNoDomainOrdered() []Protocol {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]Protocol, 0, len(noDomainOrder))
+	for _, name := range noDomainOrder {
+		if p, ok := r.protocols[name]; ok {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 // DefaultRegistry 默认注册表，包含所有 15 种协议
 func DefaultRegistry() *Registry {
 	r := NewRegistry()

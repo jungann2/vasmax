@@ -75,9 +75,8 @@ func (m *InstallMenu) Show() {
 func (m *InstallMenu) installCombination() {
 	PrintTitle("任意组合安装（需要域名解析）")
 
-	// 显示所有协议（所有协议都支持绑定域名安装）
-	allProtos := m.registry.ListAll()
-	domainProtos := allProtos
+	// 显示所有协议（固定排序：推荐 → 稳定 → 一般 → 不安全）
+	domainProtos := m.registry.ListAllOrdered()
 
 	for i, p := range domainProtos {
 		installed := ""
@@ -255,15 +254,8 @@ func (m *InstallMenu) installCombination() {
 func (m *InstallMenu) installReality() {
 	PrintTitle("一键 Reality 组合安装（无域名）")
 
-	// 列出所有支持无域名安装的协议（Reality + Hysteria2 + TUIC + AnyTLS + SOCKS5）
-	allProtos := m.registry.ListAll()
-	var realityProtos []protocol.Protocol
-	for _, p := range allProtos {
-		name := p.Name()
-		if strings.Contains(name, "reality") || name == "hysteria2" || name == "tuic" || name == "anytls" || name == "socks5" {
-			realityProtos = append(realityProtos, p)
-		}
-	}
+	// 列出所有支持无域名安装的协议（固定排序：推荐 → 稳定 → 不安全）
+	realityProtos := m.registry.ListNoDomainOrdered()
 
 	for i, p := range realityProtos {
 		installed := ""
