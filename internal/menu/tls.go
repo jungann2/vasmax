@@ -377,7 +377,14 @@ func (m *TLSMenu) detectPanelCert() {
 
 func (m *TLSMenu) installAcme() {
 	PrintInfo("正在安装 acme.sh...")
-	cmd := exec.Command("bash", "-c", "curl -fsSL https://get.acme.sh | sh -s email=admin@example.com")
+	email := ReadInput("请输入邮箱（用于证书到期提醒，直接回车跳过）")
+	var installCmd string
+	if email != "" {
+		installCmd = fmt.Sprintf("curl -fsSL https://get.acme.sh | sh -s email=%s", email)
+	} else {
+		installCmd = "curl -fsSL https://get.acme.sh | sh -s -- --no-email"
+	}
+	cmd := exec.Command("bash", "-c", installCmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
