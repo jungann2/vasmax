@@ -255,12 +255,12 @@ func (m *InstallMenu) installCombination() {
 func (m *InstallMenu) installReality() {
 	PrintTitle("一键 Reality 组合安装（无域名）")
 
-	// 列出所有支持无域名安装的协议（Reality + Hysteria2 + TUIC + SOCKS5）
+	// 列出所有支持无域名安装的协议（Reality + Hysteria2 + TUIC + AnyTLS + SOCKS5）
 	allProtos := m.registry.ListAll()
 	var realityProtos []protocol.Protocol
 	for _, p := range allProtos {
 		name := p.Name()
-		if strings.Contains(name, "reality") || name == "hysteria2" || name == "tuic" || name == "socks5" {
+		if strings.Contains(name, "reality") || name == "hysteria2" || name == "tuic" || name == "anytls" || name == "socks5" {
 			realityProtos = append(realityProtos, p)
 		}
 	}
