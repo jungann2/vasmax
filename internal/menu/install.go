@@ -44,8 +44,8 @@ func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Reg
 func (m *InstallMenu) Show() {
 	for {
 		PrintTitle("安装管理")
-		PrintOption(1, "任意组合安装")
-		PrintOption(2, "一键 Reality 安装（无域名）")
+		PrintOption(1, "任意组合安装（需要域名解析）")
+		PrintOption(2, "一键 Reality 组合安装（无域名）")
 		PrintOption(3, "查看已安装协议")
 		PrintOption(4, "卸载协议")
 		PrintOption(5, "Reality 管理")
@@ -70,11 +70,19 @@ func (m *InstallMenu) Show() {
 }
 
 func (m *InstallMenu) installCombination() {
-	PrintTitle("任意组合安装")
+	PrintTitle("任意组合安装（需要域名解析）")
 
-	// 列出所有可用协议
+	// 只列出需要域名的协议（非 Reality）
 	allProtos := m.registry.ListAll()
-	for i, p := range allProtos {
+	var domainProtos []protocol.Protocol
+	for _, p := range allProtos {
+		if strings.Contains(p.Name(), "reality") {
+			continue
+		}
+		domainProtos = append(domainProtos, p)
+	}
+
+	for i, p := range domainProtos {
 		installed := ""
 		for _, ip := range m.config.Protocols {
 			if ip == p.Name() {
@@ -98,11 +106,11 @@ func (m *InstallMenu) installCombination() {
 	parts := strings.FieldsFunc(input, func(r rune) bool { return r == ',' || r == ' ' })
 	for _, p := range parts {
 		var idx int
-		if _, err := fmt.Sscanf(p, "%d", &idx); err != nil || idx < 1 || idx > len(allProtos) {
+		if _, err := fmt.Sscanf(p, "%d", &idx); err != nil || idx < 1 || idx > len(domainProtos) {
 			PrintError(fmt.Sprintf("无效编号: %s", p))
 			return
 		}
-		selected = append(selected, allProtos[idx-1])
+		selected = append(selected, domainProtos[idx-1])
 	}
 
 	if len(selected) == 0 {
@@ -115,22 +123,15 @@ func (m *InstallMenu) installCombination() {
 		return
 	}
 
-	// 域名输入（非 Reality 协议需要）
-	needsDomain := false
-	for _, p := range selected {
-		if !strings.Contains(p.Name(), "reality") {
-			needsDomain = true
-			break
-		}
+	// 域名输入（此列表所有协议都需要域名）
+	domain := ReadInput("请输入域名")
+	if domain == "" {
+		PrintError("此安装方式需要域名，如无域名请使用一键 Reality 组合安装")
+		return
 	}
-
-	var domain string
-	if needsDomain {
-		domain = ReadInput("请输入域名")
-		if err := security.ValidateDomain(domain); err != nil {
-			PrintError(fmt.Sprintf("域名无效: %v", err))
-			return
-		}
+	if err := security.ValidateDomain(domain); err != nil {
+		PrintError(fmt.Sprintf("域名无效: %v", err))
+		return
 	}
 
 	// 创建回滚快照
@@ -199,8 +200,53 @@ func (m *InstallMenu) installCombination() {
 }
 
 func (m *InstallMenu) installReality() {
-	PrintTitle("一键 Reality 安装（无域名）")
-	PrintInfo("将自动生成 X25519 密钥对、shortId 和默认用户")
+	PrintTitle("一键 Reality 组合安装（无域名）")
+
+	// 列出所有 Reality 协议
+	allProtos := m.registry.ListAll()
+	var realityProtos []protocol.Protocol
+	for _, p := range allProtos {
+		if strings.Contains(p.Name(), "reality") {
+			realityProtos = append(realityProtos, p)
+		}
+	}
+
+	for i, p := range realityProtos {
+		installed := ""
+		for _, ip := range m.config.Protocols {
+			if ip == p.Name() {
+				installed = Green(" [已安装]")
+				break
+			}
+		}
+		PrintOption(i+1, fmt.Sprintf("%-30s (%s)%s", p.Name(), p.CoreType(), installed))
+	}
+
+	fmt.Println()
+	PrintOptionStr("0", "返回上级菜单")
+	fmt.Println()
+	input := ReadInput("请输入要安装的协议编号（空格/逗号分隔，如 1,2,3 全选）")
+	if input == "" || input == "0" {
+		return
+	}
+
+	// 解析选择
+	var selected []protocol.Protocol
+	parts := strings.FieldsFunc(input, func(r rune) bool { return r == ',' || r == ' ' })
+	for _, p := range parts {
+		var idx int
+		if _, err := fmt.Sscanf(p, "%d", &idx); err != nil || idx < 1 || idx > len(realityProtos) {
+			PrintError(fmt.Sprintf("无效编号: %s", p))
+			return
+		}
+		selected = append(selected, realityProtos[idx-1])
+	}
+
+	if len(selected) == 0 {
+		return
+	}
+
+	PrintInfo("将自动生成 X25519 密钥对、ShortID 和默认用户")
 
 	// 1. 安装 Xray-core
 	ctx := context.Background()
@@ -246,15 +292,17 @@ func (m *InstallMenu) installReality() {
 	}
 
 	// 5. 记录协议
-	found := false
-	for _, p := range m.config.Protocols {
-		if p == "vless_reality_vision" {
-			found = true
-			break
+	for _, p := range selected {
+		found := false
+		for _, ip := range m.config.Protocols {
+			if ip == p.Name() {
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		m.config.Protocols = append(m.config.Protocols, "vless_reality_vision")
+		if !found {
+			m.config.Protocols = append(m.config.Protocols, p.Name())
+		}
 	}
 
 	// 6. 自动创建默认用户（如果没有用户）
@@ -273,39 +321,35 @@ func (m *InstallMenu) installReality() {
 
 	// 7. 生成 Xray inbound 配置文件
 	PrintInfo("正在生成 Xray 配置...")
-	p, ok := m.registry.Get("vless_reality_vision")
-	if !ok {
-		PrintError("协议 vless_reality_vision 未注册")
-		return
-	}
-
 	apiUsers := make([]*api.User, 0, len(users))
 	for _, u := range users {
 		apiUsers = append(apiUsers, u.ToAPIUser())
 	}
 
-	params := &protocol.InboundParams{
-		Port:    443,
-		Users:   apiUsers,
-		Tag:     "vless_reality_vision",
-		Reality: &m.config.Reality,
-	}
+	for _, p := range selected {
+		params := &protocol.InboundParams{
+			Port:    p.DefaultPort(),
+			Users:   apiUsers,
+			Tag:     p.Name(),
+			Reality: &m.config.Reality,
+		}
 
-	inboundJSON, err := p.GenerateInbound(params)
-	if err != nil {
-		PrintError(fmt.Sprintf("生成入站配置失败: %v", err))
-		return
-	}
+		inboundJSON, err := p.GenerateInbound(params)
+		if err != nil {
+			PrintError(fmt.Sprintf("生成 %s 入站配置失败: %v", p.Name(), err))
+			continue
+		}
 
-	wrapper := map[string]interface{}{
-		"inbounds": []json.RawMessage{inboundJSON},
+		wrapper := map[string]interface{}{
+			"inbounds": []json.RawMessage{inboundJSON},
+		}
+		confPath := filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", p.Name()))
+		if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
+			PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
+			continue
+		}
+		PrintSuccess(fmt.Sprintf("%s 配置已生成", p.Name()))
 	}
-	confPath := filepath.Join(m.config.Paths.XrayConf, "05_vless_reality_vision_inbounds.json")
-	if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
-		PrintError(fmt.Sprintf("写入配置文件失败: %v", err))
-		return
-	}
-	PrintSuccess("Xray 配置已生成")
 
 	// 8. 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
@@ -333,7 +377,7 @@ func (m *InstallMenu) installReality() {
 	}
 
 	// 11. 显示安装结果和分享链接
-	PrintSuccess("Reality 安装完成")
+	PrintSuccess("Reality 组合安装完成")
 	fmt.Println()
 	m.showRealityInfo(users)
 }
