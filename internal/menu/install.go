@@ -1288,11 +1288,13 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 
 	// 选择验证方式
 	fmt.Println()
-	PrintOption(1, "standalone（需要 80 端口空闲）")
-	PrintOption(2, "Cloudflare DNS API（无需 80 端口，域名 DNS 托管在 Cloudflare）")
-	PrintOption(3, "阿里云 DNS API（无需 80 端口，域名 DNS 托管在阿里云）")
+	PrintOption(1, "standalone（需要 80 端口空闲，申请和续期时临时占用几秒）")
+	PrintOption(2, "Nginx webroot（80 端口已被 Nginx 占用时使用，续期无需停 Nginx）")
+	PrintOption(3, "Cloudflare DNS API（无需开放 80 端口，域名 DNS 需托管在 Cloudflare）")
+	PrintOption(4, "阿里云 DNS API（无需开放 80 端口，域名 DNS 需托管在阿里云）")
+	PrintOption(5, "Cloudflare DNS 通配符证书（申请 *.域名，需 Cloudflare DNS）")
 	PrintOptionStr("0", "取消")
-	mode := ReadChoice("选择验证方式", []string{"1", "2", "3"})
+	mode := ReadChoice("选择验证方式", []string{"1", "2", "3", "4", "5"})
 
 	caServer := "letsencrypt"
 	var args []string
@@ -1300,6 +1302,12 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 	case "1":
 		args = []string{"--issue", "-d", domain, "--standalone", "--server", caServer}
 	case "2":
+		webroot := ReadInput("请输入 Nginx webroot 路径（默认 /var/www/html）")
+		if webroot == "" {
+			webroot = "/var/www/html"
+		}
+		args = []string{"--issue", "-d", domain, "--webroot", webroot, "--server", caServer}
+	case "3":
 		token := ReadInput("请输入 CF_Token")
 		if token == "" {
 			PrintError("CF_Token 不能为空")
@@ -1307,7 +1315,7 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 		}
 		os.Setenv("CF_Token", token)
 		args = []string{"--issue", "-d", domain, "--dns", "dns_cf", "--server", caServer}
-	case "3":
+	case "4":
 		aliKey := ReadInput("请输入 Ali_Key")
 		aliSecret := ReadInput("请输入 Ali_Secret")
 		if aliKey == "" || aliSecret == "" {
@@ -1317,6 +1325,14 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 		os.Setenv("Ali_Key", aliKey)
 		os.Setenv("Ali_Secret", aliSecret)
 		args = []string{"--issue", "-d", domain, "--dns", "dns_ali", "--server", caServer}
+	case "5":
+		token := ReadInput("请输入 CF_Token")
+		if token == "" {
+			PrintError("CF_Token 不能为空")
+			return "", ""
+		}
+		os.Setenv("CF_Token", token)
+		args = []string{"--issue", "-d", domain, "-d", "*." + domain, "--dns", "dns_cf", "--server", caServer}
 	case "0":
 		return "", ""
 	}
