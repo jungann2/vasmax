@@ -5,6 +5,7 @@
 *.so
 *.dylib
 VasmaX
+VasmaX_linux_*
 vasmax.exe
 
 # Test binary
