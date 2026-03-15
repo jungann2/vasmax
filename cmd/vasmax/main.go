@@ -91,6 +91,10 @@ func main() {
 		reg := protocol.DefaultRegistry()
 		rbMgr := rollback.NewManager("/etc/vasmax/snapshots", logger)
 		userMgr := user.NewManager()
+		// 迁移：从 Xray 配置中恢复用户（旧版本未持久化用户的兼容）
+		if err := userMgr.RecoverFromXrayConfigs(cfg.Paths.XrayConf); err != nil {
+			logger.WithError(err).Debug("恢复 Xray 用户失败")
+		}
 		subMgr, _ := subscription.NewManager(cfg, reg, userMgr, logger)
 		routeMgr := route.NewManager(cfg.Paths.XrayConf, cfg.Paths.SingBoxConf, logger)
 		btMgr := route.NewBTManager(routeMgr)

@@ -1,7 +1,9 @@
 package user
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"vasmax/internal/api"
 	"vasmax/internal/security"
@@ -42,19 +44,94 @@ type UserTable struct {
 
 // Manager 用户管理器
 type Manager struct {
-	users    atomic.Value // *UserTable（原子替换，无锁读取）
-	localSeq int          // 本地用户自增 ID（负数，避免与 API 用户冲突）
+	users     atomic.Value // *UserTable（原子替换，无锁读取）
+	localSeq  int          // 本地用户自增 ID（负数，避免与 API 用户冲突）
+	localFile string       // 本地用户持久化文件路径
 }
 
-// NewManager 创建用户管理器
+// DefaultLocalUsersFile 默认本地用户文件路径
+const DefaultLocalUsersFile = "/etc/vasmax/local_users.json"
+
+// localUserJSON 本地用户 JSON 序列化结构
+type localUserJSON struct {
+	UUID        string `json:"uuid"`
+	Email       string `json:"email"`
+	SpeedLimit  int    `json:"speed_limit,omitempty"`
+	DeviceLimit int    `json:"device_limit,omitempty"`
+}
+
+// NewManager 创建用户管理器并自动加载本地用户
 func NewManager() *Manager {
-	m := &Manager{}
+	m := &Manager{localFile: DefaultLocalUsersFile}
 	m.users.Store(&UserTable{
 		byID:    make(map[int]*UserEntry),
 		byUUID:  make(map[string]*UserEntry),
 		entries: make([]*UserEntry, 0),
 	})
+	// 自动加载持久化的本地用户
+	_ = m.loadLocalUsers()
 	return m
+}
+
+// loadLocalUsers 从文件加载本地用户
+func (m *Manager) loadLocalUsers() error {
+	data, err := os.ReadFile(m.localFile)
+	if err != nil {
+		return err // 文件不存在时静默忽略
+	}
+	var users []localUserJSON
+	if err := json.Unmarshal(data, &users); err != nil {
+		return err
+	}
+	for _, u := range users {
+		m.localSeq--
+		entry := &UserEntry{
+			ID:          m.localSeq,
+			UUID:        u.UUID,
+			Email:       u.Email,
+			SpeedLimit:  u.SpeedLimit,
+			DeviceLimit: u.DeviceLimit,
+		}
+		old := m.users.Load().(*UserTable)
+		table := &UserTable{
+			byID:    make(map[int]*UserEntry, len(old.byID)+1),
+			byUUID:  make(map[string]*UserEntry, len(old.byUUID)+1),
+			entries: make([]*UserEntry, 0, len(old.entries)+1),
+		}
+		for k, v := range old.byID {
+			table.byID[k] = v
+		}
+		for k, v := range old.byUUID {
+			table.byUUID[k] = v
+		}
+		table.entries = append(table.entries, old.entries...)
+		table.byID[entry.ID] = entry
+		table.byUUID[entry.UUID] = entry
+		table.entries = append(table.entries, entry)
+		m.users.Store(table)
+	}
+	return nil
+}
+
+// saveLocalUsers 将本地用户持久化到文件
+func (m *Manager) saveLocalUsers() error {
+	table := m.users.Load().(*UserTable)
+	var users []localUserJSON
+	for _, e := range table.entries {
+		if e.ID < 0 { // 只保存本地用户（ID 为负数）
+			users = append(users, localUserJSON{
+				UUID:        e.UUID,
+				Email:       e.Email,
+				SpeedLimit:  e.SpeedLimit,
+				DeviceLimit: e.DeviceLimit,
+			})
+		}
+	}
+	data, err := json.MarshalIndent(users, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(m.localFile, data, 0600)
 }
 
 // UpdateUsers 原子替换用户表（托管模式，从 API 用户列表）
@@ -124,7 +201,9 @@ func (m *Manager) AddLocalUser(uuid, email string) error {
 	table.entries = append(table.entries, entry)
 
 	m.users.Store(table)
-	return nil
+
+	// 持久化到文件
+	return m.saveLocalUsers()
 }
 
 // RemoveLocalUser 删除本地用户（独立模式）
@@ -158,7 +237,9 @@ func (m *Manager) RemoveLocalUser(uuid string) error {
 	}
 
 	m.users.Store(table)
-	return nil
+
+	// 持久化到文件
+	return m.saveLocalUsers()
 }
 
 // GetUser 根据 ID 获取用户
@@ -183,4 +264,77 @@ func (m *Manager) GetAllUsers() []*UserEntry {
 func (m *Manager) Count() int {
 	table := m.users.Load().(*UserTable)
 	return len(table.entries)
+}
+
+// RecoverFromXrayConfigs 从 Xray 入站配置文件中恢复用户（迁移用）
+// 当 local_users.json 不存在但 Xray 配置中有用户时，自动恢复
+func (m *Manager) RecoverFromXrayConfigs(xrayConfDir string) error {
+	if m.Count() > 0 {
+		return nil // 已有用户，无需恢复
+	}
+
+	entries, err := os.ReadDir(xrayConfDir)
+	if err != nil {
+		return err
+	}
+
+	recovered := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !isInboundFile(entry.Name()) {
+			continue
+		}
+		data, err := os.ReadFile(xrayConfDir + "/" + entry.Name())
+		if err != nil {
+			continue
+		}
+		uuids := extractUUIDs(data)
+		for _, uuid := range uuids {
+			if m.GetUserByUUID(uuid) != nil {
+				continue
+			}
+			email := fmt.Sprintf("user_%s", uuid[:8])
+			_ = m.AddLocalUser(uuid, email)
+			recovered++
+		}
+	}
+	return nil
+}
+
+func isInboundFile(name string) bool {
+	return len(name) > 5 && name[len(name)-5:] == ".json"
+}
+
+// extractUUIDs 从 Xray 配置 JSON 中提取所有用户 UUID
+func extractUUIDs(data []byte) []string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	inboundsRaw, ok := raw["inbounds"]
+	if !ok {
+		return nil
+	}
+	var inbounds []json.RawMessage
+	if err := json.Unmarshal(inboundsRaw, &inbounds); err != nil {
+		return nil
+	}
+	var uuids []string
+	for _, ib := range inbounds {
+		var inbound struct {
+			Settings struct {
+				Clients []struct {
+					ID string `json:"id"`
+				} `json:"clients"`
+			} `json:"settings"`
+		}
+		if err := json.Unmarshal(ib, &inbound); err != nil {
+			continue
+		}
+		for _, c := range inbound.Settings.Clients {
+			if c.ID != "" {
+				uuids = append(uuids, c.ID)
+			}
+		}
+	}
+	return uuids
 }
