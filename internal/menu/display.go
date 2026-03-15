@@ -23,6 +23,10 @@ const (
 // MaxRetries is the maximum number of invalid input retries before returning.
 const MaxRetries = 5
 
+// stdinScanner is a shared scanner for reading user input.
+// Using a single scanner avoids losing buffered data between calls.
+var stdinScanner = bufio.NewScanner(os.Stdin)
+
 // Red returns text in red.
 func Red(s string) string { return ColorRed + s + ColorReset }
 
@@ -93,9 +97,8 @@ func PrintSectionTitle(title string) {
 // ReadInput reads a line of input from the user with a prompt.
 func ReadInput(prompt string) string {
 	fmt.Printf("  %s: ", prompt)
-	scanner := bufio.NewScanner(os.Stdin)
-	if scanner.Scan() {
-		return strings.TrimSpace(scanner.Text())
+	if stdinScanner.Scan() {
+		return strings.TrimSpace(stdinScanner.Text())
 	}
 	return ""
 }
