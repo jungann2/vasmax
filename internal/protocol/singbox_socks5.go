@@ -43,10 +43,11 @@ func (s *Socks5) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
 }
 
 func (s *Socks5) GenerateURI(user *api.User, info *ServerInfo) string {
+	host := effectiveHost(info)
 	return fmt.Sprintf("socks5://%s:%s@%s:%d#%s",
 		fmt.Sprintf("user_%d", user.ID), user.UUID,
-		info.Host, info.Port,
-		fmt.Sprintf("%s-socks5", info.Domain))
+		host, info.Port,
+		fmt.Sprintf("%s-socks5", host))
 }
 
 func (s *Socks5) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {

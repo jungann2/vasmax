@@ -375,8 +375,8 @@ func (v *VlessRealityVision) GenerateURI(user *api.User, info *ServerInfo) strin
 		params.Set("sid", info.Reality.ShortID)
 	}
 	params.Set("fp", "chrome")
-	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-reality-vision", info.Host)))
+	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
+		url.PathEscape(fmt.Sprintf("%s-reality-vision", effectiveHost(info))))
 }
 
 func (v *VlessRealityVision) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
@@ -494,8 +494,8 @@ func (v *VlessRealityGRPC) GenerateURI(user *api.User, info *ServerInfo) string 
 		params.Set("pbk", info.Reality.PublicKey)
 		params.Set("sid", info.Reality.ShortID)
 	}
-	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-reality-grpc", info.Host)))
+	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
+		url.PathEscape(fmt.Sprintf("%s-reality-grpc", effectiveHost(info))))
 }
 
 func (v *VlessRealityGRPC) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
@@ -618,8 +618,8 @@ func (v *VlessRealityXHTTP) GenerateURI(user *api.User, info *ServerInfo) string
 		params.Set("pbk", info.Reality.PublicKey)
 		params.Set("sid", info.Reality.ShortID)
 	}
-	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-reality-xhttp", info.Host)))
+	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
+		url.PathEscape(fmt.Sprintf("%s-reality-xhttp", effectiveHost(info))))
 }
 
 func (v *VlessRealityXHTTP) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
