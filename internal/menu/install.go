@@ -80,13 +80,12 @@ func (m *InstallMenu) installCombination() {
 		installed := ""
 		for _, ip := range m.config.Protocols {
 			if ip == p.Name() {
-				mode := m.config.ProtocolModes[p.Name()]
-				if mode == "nodomain" {
+				mode := inferProtocolMode(m.config.ProtocolModes, p.Name())
+				switch mode {
+				case "nodomain":
 					installed = Yellow(" [已安装无域名版本]")
-				} else if mode == "domain" {
+				case "domain":
 					installed = Green(" [已安装绑定域名版本]")
-				} else {
-					installed = Green(" [已安装]")
 				}
 				break
 			}
@@ -234,13 +233,12 @@ func (m *InstallMenu) installReality() {
 		installed := ""
 		for _, ip := range m.config.Protocols {
 			if ip == p.Name() {
-				mode := m.config.ProtocolModes[p.Name()]
-				if mode == "domain" {
+				mode := inferProtocolMode(m.config.ProtocolModes, p.Name())
+				switch mode {
+				case "domain":
 					installed = Yellow(" [已安装绑定域名版本]")
-				} else if mode == "nodomain" {
+				case "nodomain":
 					installed = Green(" [已安装无域名版本]")
-				} else {
-					installed = Green(" [已安装]")
 				}
 				break
 			}
@@ -548,11 +546,12 @@ func (m *InstallMenu) showInstalled() {
 		return
 	}
 	for i, p := range m.config.Protocols {
-		mode := m.config.ProtocolModes[p]
+		mode := inferProtocolMode(m.config.ProtocolModes, p)
 		modeStr := ""
-		if mode == "domain" {
+		switch mode {
+		case "domain":
 			modeStr = Green(" (绑定域名)")
-		} else if mode == "nodomain" {
+		case "nodomain":
 			modeStr = Cyan(" (无域名)")
 		}
 		PrintOption(i+1, p+modeStr)
@@ -590,6 +589,20 @@ func (m *InstallMenu) uninstallProtocol() {
 	}
 
 	PrintSuccess(fmt.Sprintf("%s 已卸载", name))
+}
+
+// inferProtocolMode 推断协议安装模式，兼容旧版本未记录模式的情况
+func inferProtocolMode(modes map[string]string, name string) string {
+	if modes != nil {
+		if mode, ok := modes[name]; ok && mode != "" {
+			return mode
+		}
+	}
+	// 旧版本未记录模式，根据协议名推断
+	if strings.Contains(name, "reality") {
+		return "nodomain"
+	}
+	return "domain"
 }
 
 // protocolLabel 生成协议的描述标签
