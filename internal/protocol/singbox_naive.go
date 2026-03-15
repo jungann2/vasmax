@@ -52,7 +52,7 @@ func (n *Naive) GenerateURI(user *api.User, info *ServerInfo) string {
 	username := fmt.Sprintf("user_%d", user.ID)
 	return fmt.Sprintf("naive+https://%s:%s@%s:%d#%s",
 		url.PathEscape(username), url.PathEscape(user.UUID),
-		info.Host, info.Port,
+		effectiveHost(info), info.Port,
 		url.PathEscape(fmt.Sprintf("%s-naive", info.Domain)))
 }
 

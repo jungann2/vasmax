@@ -67,8 +67,8 @@ func (t *Tuic) GenerateURI(user *api.User, info *ServerInfo) string {
 	if net.ParseIP(info.Domain) != nil {
 		params.Set("insecure", "1")
 	}
-	return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", user.UUID, user.UUID, info.Host, info.Port,
-		params.Encode(), url.PathEscape(fmt.Sprintf("%s-tuic", info.Host)))
+	return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", user.UUID, user.UUID, effectiveHost(info), info.Port,
+		params.Encode(), url.PathEscape(fmt.Sprintf("%s-tuic", info.Domain)))
 }
 
 func (t *Tuic) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {

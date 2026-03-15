@@ -62,8 +62,8 @@ func (a *AnyTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 		params.Set("insecure", "0")
 		params.Set("sni", info.Domain)
 	}
-	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-anytls", info.Host)))
+	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
+		url.PathEscape(fmt.Sprintf("%s-anytls", info.Domain)))
 }
 
 func (a *AnyTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {

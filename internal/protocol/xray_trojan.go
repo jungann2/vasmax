@@ -63,7 +63,7 @@ func (t *TrojanTCPTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 	params.Set("security", "tls")
 	params.Set("sni", info.Domain)
 	params.Set("alpn", "h2,http/1.1")
-	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
+	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
 		url.PathEscape(fmt.Sprintf("%s-trojan", info.Domain)))
 }
 

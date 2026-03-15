@@ -60,7 +60,7 @@ func (v *VlessTCPTLSVision) GenerateUserEntry(user *api.User) (json.RawMessage, 
 }
 
 func (v *VlessTCPTLSVision) GenerateURI(user *api.User, info *ServerInfo) string {
-	host := info.Host
+	host := effectiveHost(info)
 	params := url.Values{}
 	params.Set("type", "tcp")
 	params.Set("security", "tls")
@@ -714,6 +714,10 @@ func buildVLESSClients(users []*api.User, withFlow bool) []map[string]interface{
 func effectiveHost(info *ServerInfo) string {
 	if info.CDNHost != "" {
 		return info.CDNHost
+	}
+	// 域名模式下优先使用域名作为连接地址
+	if info.Domain != "" {
+		return info.Domain
 	}
 	return info.Host
 }

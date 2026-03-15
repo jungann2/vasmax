@@ -62,8 +62,8 @@ func (h *Hysteria2) GenerateURI(user *api.User, info *ServerInfo) string {
 	} else {
 		params.Set("insecure", "0")
 	}
-	return fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-hysteria2", info.Host)))
+	return fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
+		url.PathEscape(fmt.Sprintf("%s-hysteria2", info.Domain)))
 }
 
 func (h *Hysteria2) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
