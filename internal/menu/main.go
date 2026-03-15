@@ -36,6 +36,7 @@ type MainMenu struct {
 	subMenu   *SubscriptionMenu
 	portMenu  *PortMenu
 	alpnMenu  *ALPNMenu
+	monitor   *MonitorMenu
 }
 
 // NewMainMenu creates a new main menu with all sub-menus wired up.
@@ -70,6 +71,7 @@ func NewMainMenu(
 		subMenu:   NewSubscriptionMenu(cfg, subMgr, userMgr, logger),
 		portMenu:  NewPortMenu(cfg, fwMgr, logger),
 		alpnMenu:  NewALPNMenu(cfg, logger),
+		monitor:   NewMonitorMenu(cfg, userMgr, logger),
 	}
 }
 
@@ -79,7 +81,7 @@ func (m *MainMenu) Show() {
 		m.printHeader()
 		m.printOptions()
 
-		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}
+		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"}
 		choice := ReadChoice(i18n.T("menu.select"), choices)
 
 		switch choice {
@@ -109,6 +111,8 @@ func (m *MainMenu) Show() {
 			m.tls.Show()
 		case "13":
 			m.tools.Show()
+		case "14":
+			m.monitor.Show()
 		case "0":
 			return
 		}
@@ -207,6 +211,7 @@ func (m *MainMenu) printOptions() {
 	PrintOption(11, "Xboard2 对接管理")
 	PrintOption(12, "TLS 证书管理")
 	PrintOption(13, "其他工具（BBR/CDN管理/伪装站管理/健康检查）")
+	PrintOption(14, "实时监控")
 	PrintOptionStr("0", "退出")
 	fmt.Println()
 }

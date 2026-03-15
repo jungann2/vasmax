@@ -181,6 +181,15 @@ func (m *InstallMenu) installCombination() {
 		PrintSuccess(fmt.Sprintf("%s 安装完成", p.Name()))
 	}
 
+	// 生成 Stats API 配置（监控功能需要）
+	confDir := m.config.Paths.XrayConf
+	if err := protocol.GenerateStatsAPIConfig(confDir); err != nil {
+		m.logger.WithError(err).Warn("生成 Stats API 配置失败")
+	}
+	if err := protocol.GenerateStatsModuleConfig(confDir); err != nil {
+		m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+	}
+
 	// 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
@@ -383,13 +392,21 @@ func (m *InstallMenu) installReality() {
 		PrintSuccess(fmt.Sprintf("%s 配置已生成", p.Name()))
 	}
 
-	// 8. 保存配置
+	// 8. 生成 Stats API 配置（监控功能需要）
+	if err := protocol.GenerateStatsAPIConfig(m.config.Paths.XrayConf); err != nil {
+		m.logger.WithError(err).Warn("生成 Stats API 配置失败")
+	}
+	if err := protocol.GenerateStatsModuleConfig(m.config.Paths.XrayConf); err != nil {
+		m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+	}
+
+	// 9. 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}
 
-	// 9. 启动 Xray
+	// 10. 启动 Xray
 	PrintInfo("正在启动 Xray...")
 	if err := m.coreMgr.RestartXray(); err != nil {
 		PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
@@ -403,12 +420,12 @@ func (m *InstallMenu) installReality() {
 		}
 	}
 
-	// 10. 生成订阅
+	// 11. 生成订阅
 	if m.subMgr != nil {
 		_ = m.subMgr.GenerateAll()
 	}
 
-	// 11. 显示安装结果和分享链接
+	// 12. 显示安装结果和分享链接
 	PrintSuccess("Reality 组合安装完成")
 	fmt.Println()
 	m.showRealityInfo(users)
