@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -125,7 +126,7 @@ func (m *InstallMenu) installCombination() {
 		return
 	}
 
-	// 域名输入（此列表所有协议都需要域名）
+	// 域名输入
 	domain := ReadInput("请输入域名")
 	if domain == "" {
 		PrintError("此安装方式需要域名，如无域名请使用一键 Reality 组合安装")
@@ -136,13 +137,96 @@ func (m *InstallMenu) installCombination() {
 		return
 	}
 
+	// 区分需要 TLS 证书的协议和 Reality 协议
+	var needTLSCert bool
+	var needReality bool
+	for _, p := range selected {
+		if strings.Contains(p.Name(), "reality") {
+			needReality = true
+		} else if p.Name() != "socks5" {
+			needTLSCert = true
+		}
+	}
+
+	// TLS 证书检测与申请
+	certFile := m.config.TLS.CertFile
+	keyFile := m.config.TLS.KeyFile
+	if needTLSCert {
+		// 先尝试检测已有证书
+		m.config.TLS.Domain = domain
+		certFile, keyFile = config.DetectCertPath(&m.config.TLS)
+		if certFile == "" || keyFile == "" {
+			PrintWarning("未找到 TLS 证书")
+			PrintInfo("域名模式协议需要 TLS 证书才能正常工作")
+			fmt.Println()
+			PrintOption(1, "立即申请证书（acme.sh）")
+			PrintOption(2, "跳过，稍后在 TLS 证书管理中申请")
+			choice := ReadChoice("请选择", []string{"1", "2"})
+			if choice == "1" {
+				certFile, keyFile = m.inlineIssueCert(domain)
+				if certFile == "" || keyFile == "" {
+					PrintError("证书申请失败，安装中止")
+					return
+				}
+			} else {
+				PrintWarning("跳过证书申请，非 Reality 协议将无法正常工作直到申请证书并重新安装")
+			}
+		} else {
+			PrintSuccess(fmt.Sprintf("已检测到 TLS 证书: %s", certFile))
+		}
+	}
+
+	// Reality 协议需要密钥对
+	if needReality {
+		if m.config.Reality.PrivateKey == "" {
+			PrintInfo("正在生成 X25519 密钥对...")
+			keyPair, err := security.GenerateX25519KeyPair()
+			if err != nil {
+				PrintError(fmt.Sprintf("生成密钥对失败: %v", err))
+				return
+			}
+			m.config.Reality.PrivateKey = keyPair.PrivateKey
+			m.config.Reality.PublicKey = keyPair.PublicKey
+			PrintSuccess("X25519 密钥对已生成")
+		}
+		if m.config.Reality.ShortID == "" {
+			shortID, err := security.GenerateShortID()
+			if err != nil {
+				PrintError(fmt.Sprintf("生成 ShortID 失败: %v", err))
+				return
+			}
+			m.config.Reality.ShortID = shortID
+		}
+		if m.config.Reality.Dest == "" {
+			m.config.Reality.Dest = "www.microsoft.com:443"
+			m.config.Reality.ServerName = "www.microsoft.com"
+		}
+		if m.config.Reality.Port == 0 {
+			m.config.Reality.Port = 443
+		}
+	}
+
 	// 创建回滚快照
 	snap, err := m.rollbackMgr.CreateSnapshot()
 	if err != nil {
 		m.logger.WithError(err).Warn("创建回滚快照失败")
 	}
 
-	// 安装核心
+	// 自动创建默认用户（如果没有用户）
+	users := m.userMgr.GetAllUsers()
+	if len(users) == 0 {
+		PrintInfo("正在创建默认用户...")
+		uuid := generateUUID()
+		email := fmt.Sprintf("user_%s", uuid[:8])
+		if err := m.userMgr.AddLocalUser(uuid, email); err != nil {
+			PrintError(fmt.Sprintf("创建用户失败: %v", err))
+			return
+		}
+		PrintSuccess(fmt.Sprintf("默认用户已创建: %s", uuid))
+		users = m.userMgr.GetAllUsers()
+	}
+
+	// 安装核心并记录协议
 	ctx := context.Background()
 	for _, p := range selected {
 		PrintInfo(fmt.Sprintf("正在安装 %s...", p.Name()))
@@ -176,7 +260,6 @@ func (m *InstallMenu) installCombination() {
 		}
 		m.config.ProtocolModes[p.Name()] = "domain"
 
-		_ = domain // Used in config generation
 		PrintSuccess(fmt.Sprintf("%s 安装完成", p.Name()))
 	}
 
@@ -190,6 +273,79 @@ func (m *InstallMenu) installCombination() {
 		case "singbox":
 			hasSingBoxProto = true
 		}
+	}
+
+	// 生成 inbound 配置文件
+	PrintInfo("正在生成协议配置...")
+	apiUsers := make([]*api.User, 0, len(users))
+	for _, u := range users {
+		apiUsers = append(apiUsers, u.ToAPIUser())
+	}
+
+	for _, p := range selected {
+		params := &protocol.InboundParams{
+			Port:   p.DefaultPort(),
+			Users:  apiUsers,
+			Tag:    p.Name(),
+			Domain: domain,
+		}
+
+		// Reality 协议使用 Reality 配置
+		if strings.Contains(p.Name(), "reality") {
+			params.Reality = &m.config.Reality
+			params.Port = m.config.Reality.EffectivePort()
+		}
+
+		// 非 Reality、非 socks5 协议使用 TLS 证书
+		if !strings.Contains(p.Name(), "reality") && p.Name() != "socks5" {
+			params.CertFile = certFile
+			params.KeyFile = keyFile
+		}
+
+		// WS/HTTPUpgrade 协议设置路径
+		transport := p.TransportType()
+		if transport == "ws" || transport == "httpupgrade" {
+			params.Path = defaultWSPath(p)
+		}
+		if transport == "grpc" {
+			params.ServiceName = defaultGRPCServiceName(p)
+		}
+
+		// TLS 版本设置
+		params.TLSMinVersion = m.config.TLS.MinVersion
+		params.TLSMaxVersion = m.config.TLS.MaxVersion
+
+		inboundJSON, err := p.GenerateInbound(params)
+		if err != nil {
+			PrintError(fmt.Sprintf("生成 %s 入站配置失败: %v", p.Name(), err))
+			continue
+		}
+
+		// 根据核心类型包装和写入
+		var confPath string
+		switch p.CoreType() {
+		case "singbox":
+			// sing-box 直接写入 confdir（sing-box -C 读取目录下所有 JSON）
+			wrapper := map[string]interface{}{
+				"inbounds": []json.RawMessage{inboundJSON},
+			}
+			confPath = filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("10_%s_inbounds.json", p.Name()))
+			if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
+				PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
+				continue
+			}
+		default:
+			// Xray 写入 confdir
+			wrapper := map[string]interface{}{
+				"inbounds": []json.RawMessage{inboundJSON},
+			}
+			confPath = filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", p.Name()))
+			if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
+				PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
+				continue
+			}
+		}
+		PrintSuccess(fmt.Sprintf("%s 配置已生成", p.Name()))
 	}
 
 	// 生成 Xray 基础配置
@@ -213,6 +369,15 @@ func (m *InstallMenu) installCombination() {
 		}
 	}
 
+	// 保存域名和证书路径到配置
+	m.config.TLS.Domain = domain
+	if certFile != "" {
+		m.config.TLS.CertFile = certFile
+	}
+	if keyFile != "" {
+		m.config.TLS.KeyFile = keyFile
+	}
+
 	// 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
@@ -220,6 +385,20 @@ func (m *InstallMenu) installCombination() {
 
 	// 自动配置 Nginx 反代（ws/grpc/httpupgrade 协议需要）
 	m.autoConfigNginx(selected, domain)
+
+	// 启动核心服务
+	if hasXrayProto {
+		PrintInfo("正在启动 Xray...")
+		if err := m.coreMgr.RestartXray(); err != nil {
+			PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
+		}
+	}
+	if hasSingBoxProto {
+		PrintInfo("正在启动 sing-box...")
+		if err := m.coreMgr.RestartSingBox(); err != nil {
+			PrintWarning(fmt.Sprintf("启动 sing-box 失败: %v（可能需要手动启动）", err))
+		}
+	}
 
 	// 验证服务启动
 	PrintInfo("等待服务启动...")
@@ -234,16 +413,26 @@ func (m *InstallMenu) installCombination() {
 	}
 
 	// 显示证书文件路径
-	if m.config.TLS.CertFile != "" || m.config.TLS.KeyFile != "" {
+	if certFile != "" || keyFile != "" {
 		fmt.Println()
 		PrintInfo("TLS 证书文件路径:")
-		if m.config.TLS.CertFile != "" {
-			PrintInfo(fmt.Sprintf("  证书文件: %s", m.config.TLS.CertFile))
+		if certFile != "" {
+			PrintInfo(fmt.Sprintf("  证书文件: %s", certFile))
 		}
-		if m.config.TLS.KeyFile != "" {
-			PrintInfo(fmt.Sprintf("  私钥文件: %s", m.config.TLS.KeyFile))
+		if keyFile != "" {
+			PrintInfo(fmt.Sprintf("  私钥文件: %s", keyFile))
 		}
 	}
+
+	// 生成订阅
+	if m.subMgr != nil {
+		_ = m.subMgr.GenerateAll()
+	}
+
+	// 显示安装结果和分享链接
+	PrintSuccess("域名组合安装完成")
+	fmt.Println()
+	m.showDomainInfo(users, domain)
 
 	// 清理快照
 	if snap != nil {
@@ -588,6 +777,20 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 			info.Domain = serverIP
 		}
 
+		// 域名模式协议使用域名
+		if mode == "domain" && m.config.TLS.Domain != "" {
+			info.Domain = m.config.TLS.Domain
+		}
+
+		// WS/HTTPUpgrade/gRPC 路径
+		transport := p.TransportType()
+		if transport == "ws" || transport == "httpupgrade" {
+			info.Path = defaultWSPath(p)
+		}
+		if transport == "grpc" {
+			info.ServiceName = defaultGRPCServiceName(p)
+		}
+
 		PrintSeparator()
 		PrintInfo(fmt.Sprintf("协议: %s", protoName))
 
@@ -779,6 +982,15 @@ func (m *InstallMenu) showInstalled() {
 			info.Domain = serverIP
 		}
 
+		// WS/HTTPUpgrade/gRPC 路径
+		transport := p.TransportType()
+		if transport == "ws" || transport == "httpupgrade" {
+			info.Path = defaultWSPath(p)
+		}
+		if transport == "grpc" {
+			info.ServiceName = defaultGRPCServiceName(p)
+		}
+
 		fmt.Println()
 		PrintSeparator()
 		PrintInfo(fmt.Sprintf("协议: %s", protoName))
@@ -858,12 +1070,18 @@ func (m *InstallMenu) uninstallProtocol() {
 			needRestartXray = true
 		}
 
-		// 2. 删除 sing-box 入站配置文件
-		singboxConfFile := filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("%s.json", name))
+		// 2. 删除 sing-box 入站配置文件（两种命名格式都尝试删除）
+		singboxConfFile := filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("10_%s_inbounds.json", name))
 		if err := os.Remove(singboxConfFile); err != nil && !os.IsNotExist(err) {
 			m.logger.WithError(err).Warnf("删除 sing-box 配置文件失败: %s", singboxConfFile)
 		} else if err == nil {
 			PrintInfo(fmt.Sprintf("已删除 sing-box 配置: %s", singboxConfFile))
+			needRestartSingBox = true
+		}
+		// 兼容旧版命名格式
+		singboxConfFileOld := filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("%s.json", name))
+		if err := os.Remove(singboxConfFileOld); err == nil {
+			PrintInfo(fmt.Sprintf("已删除 sing-box 配置: %s", singboxConfFileOld))
 			needRestartSingBox = true
 		}
 
@@ -1045,6 +1263,176 @@ func defaultGRPCServiceName(p protocol.Protocol) string {
 		return "trojangrpc"
 	default:
 		return strings.ReplaceAll(p.Name(), "_", "")
+	}
+}
+
+// inlineIssueCert 在安装流程中内联申请 TLS 证书
+func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) {
+	// 检查 acme.sh 是否安装
+	acmePath := filepath.Join(os.Getenv("HOME"), ".acme.sh", "acme.sh")
+	if _, err := os.Stat(acmePath); os.IsNotExist(err) {
+		PrintWarning("acme.sh 未安装")
+		if Confirm("是否安装 acme.sh?") {
+			cmd := exec.Command("bash", "-c", "curl -fsSL https://get.acme.sh | sh -s email=admin@example.com")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				PrintError(fmt.Sprintf("acme.sh 安装失败: %v", err))
+				return "", ""
+			}
+			PrintSuccess("acme.sh 安装成功")
+		} else {
+			return "", ""
+		}
+	}
+
+	// 选择验证方式
+	fmt.Println()
+	PrintOption(1, "standalone（需要 80 端口空闲）")
+	PrintOption(2, "Cloudflare DNS API（无需 80 端口，域名 DNS 托管在 Cloudflare）")
+	PrintOption(3, "阿里云 DNS API（无需 80 端口，域名 DNS 托管在阿里云）")
+	PrintOptionStr("0", "取消")
+	mode := ReadChoice("选择验证方式", []string{"1", "2", "3"})
+
+	caServer := "letsencrypt"
+	var args []string
+	switch mode {
+	case "1":
+		args = []string{"--issue", "-d", domain, "--standalone", "--server", caServer}
+	case "2":
+		token := ReadInput("请输入 CF_Token")
+		if token == "" {
+			PrintError("CF_Token 不能为空")
+			return "", ""
+		}
+		os.Setenv("CF_Token", token)
+		args = []string{"--issue", "-d", domain, "--dns", "dns_cf", "--server", caServer}
+	case "3":
+		aliKey := ReadInput("请输入 Ali_Key")
+		aliSecret := ReadInput("请输入 Ali_Secret")
+		if aliKey == "" || aliSecret == "" {
+			PrintError("Ali_Key 和 Ali_Secret 不能为空")
+			return "", ""
+		}
+		os.Setenv("Ali_Key", aliKey)
+		os.Setenv("Ali_Secret", aliSecret)
+		args = []string{"--issue", "-d", domain, "--dns", "dns_ali", "--server", caServer}
+	case "0":
+		return "", ""
+	}
+
+	PrintInfo("正在申请证书...")
+	cmd := exec.Command(acmePath, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		PrintError(fmt.Sprintf("证书申请失败: %v", err))
+		return "", ""
+	}
+
+	// 安装证书到 TLS 目录
+	tlsDir := config.DefaultTLSDir
+	os.MkdirAll(tlsDir, 0755)
+	installArgs := []string{
+		"--install-cert", "-d", domain,
+		"--cert-file", filepath.Join(tlsDir, domain+".crt"),
+		"--key-file", filepath.Join(tlsDir, domain+".key"),
+		"--fullchain-file", filepath.Join(tlsDir, domain+".fullchain.crt"),
+		"--reloadcmd", "systemctl restart VasmaX",
+	}
+	installCmd := exec.Command(acmePath, installArgs...)
+	installCmd.Stdout = os.Stdout
+	installCmd.Stderr = os.Stderr
+	if err := installCmd.Run(); err != nil {
+		PrintError(fmt.Sprintf("证书安装失败: %v", err))
+		return "", ""
+	}
+
+	// 设置私钥权限
+	keyPath := filepath.Join(tlsDir, domain+".key")
+	_ = config.EnsureKeyPermissions(keyPath)
+
+	certPath := filepath.Join(tlsDir, domain+".fullchain.crt")
+
+	// 更新配置
+	m.config.TLS.Domain = domain
+	m.config.TLS.CertFile = certPath
+	m.config.TLS.KeyFile = keyPath
+	m.config.TLS.Provider = caServer
+
+	PrintSuccess(fmt.Sprintf("证书已申请并安装到 %s", tlsDir))
+	return certPath, keyPath
+}
+
+// showDomainInfo 显示域名模式安装结果和分享链接
+func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
+	PrintTitle("连接信息")
+
+	serverIP := getServerIP()
+	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
+	PrintInfo(fmt.Sprintf("域名: %s", domain))
+	fmt.Println()
+
+	for _, protoName := range m.config.Protocols {
+		p, ok := m.registry.Get(protoName)
+		if !ok {
+			continue
+		}
+
+		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
+
+		info := &protocol.ServerInfo{
+			Host: serverIP,
+			Port: p.DefaultPort(),
+		}
+
+		// 域名模式协议使用域名
+		if mode == "domain" {
+			info.Domain = domain
+			if m.config.CDN.Enabled && m.config.CDN.Address != "" {
+				info.CDNHost = m.config.CDN.Address
+			}
+		}
+
+		// Reality 协议使用 Reality 配置
+		if strings.Contains(protoName, "reality") {
+			info.Reality = &m.config.Reality
+			info.Port = m.config.Reality.EffectivePort()
+		}
+
+		// 无域名模式下 sing-box 协议用 IP 作为 Domain
+		if mode == "nodomain" && p.CoreType() == "singbox" {
+			info.Domain = serverIP
+		}
+
+		// WS/HTTPUpgrade/gRPC 路径
+		transport := p.TransportType()
+		if transport == "ws" || transport == "httpupgrade" {
+			info.Path = defaultWSPath(p)
+		}
+		if transport == "grpc" {
+			info.ServiceName = defaultGRPCServiceName(p)
+		}
+
+		PrintSeparator()
+		PrintInfo(fmt.Sprintf("协议: %s", protoName))
+
+		for _, u := range users {
+			apiUser := u.ToAPIUser()
+			uri := p.GenerateURI(apiUser, info)
+			if uri == "" {
+				continue
+			}
+
+			PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+			PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
+			fmt.Println()
+			PrintInfo("分享链接:")
+			fmt.Printf("  %s\n", uri)
+			fmt.Println()
+			PrintInfo("二维码:")
+			fmt.Println(subscription.GenerateTerminalQR(uri))
+		}
 	}
 }
 
