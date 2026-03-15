@@ -403,6 +403,20 @@ uninstall() {
     rm -f /etc/sysctl.d/99-vasmax-ipv6.conf
     sysctl --system &>/dev/null || true
 
+    # 检测是否安装了非原装内核
+    local current_kernel
+    current_kernel="$(uname -r)"
+    if echo "${current_kernel}" | grep -qiE "bbrplus|xanmod|zen|lotserver|liquorix"; then
+        yellow "检测到非原装内核: ${current_kernel}"
+        yellow "该内核可能是通过 VasmaX BBR 菜单安装的"
+        yellow "为安全起见，不会自动卸载内核（卸载运行中的内核会导致系统崩溃）"
+        yellow "如需恢复原装内核，请手动操作："
+        yellow "  1. 安装原装内核: apt install linux-image-amd64"
+        yellow "  2. 重启后删除第三方内核: dpkg --purge <内核包名>"
+    else
+        green "当前内核为原装内核（${current_kernel}），BBR 配置已清理"
+    fi
+
     # 清理 iptables NAT 端口跳跃规则（如有）
     if command -v iptables &>/dev/null; then
         iptables -t nat -F PREROUTING 2>/dev/null || true
