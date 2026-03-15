@@ -167,27 +167,124 @@ func (m *Manager) GetStatus() map[string]CoreStatus {
 }
 
 func (m *Manager) installXray(ctx context.Context) error {
-	// 实际安装逻辑由 CLI 菜单调用时提供下载 URL
+	// 下载 Xray-core 二进制
 	tasks := []downloader.DownloadTask{
 		{URL: m.xray.DownloadURL(), DestPath: m.xray.BinaryPath, Name: "xray-core"},
 	}
-	return downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
+	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
 		m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
-	})
+	}); err != nil {
+		return err
+	}
+
+	// 设置可执行权限
+	if err := os.Chmod(m.xray.BinaryPath, 0755); err != nil {
+		m.logger.WithError(err).Warn("设置 Xray 可执行权限失败")
+	}
+
+	// 创建配置目录
+	os.MkdirAll(m.xray.ConfDir, 0755)
+
+	// 安装 systemd service 文件
+	return m.installXrayService()
+}
+
+// installXrayService 创建 Xray systemd service 文件
+func (m *Manager) installXrayService() error {
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=Xray Service
+Documentation=https://xtls.github.io
+After=network.target nss-lookup.target
+
+[Service]
+Type=simple
+ExecStart=%s run -confdir %s
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+`, m.xray.BinaryPath, m.xray.ConfDir)
+
+	servicePath := "/etc/systemd/system/" + m.xray.ServiceName
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return fmt.Errorf("创建 Xray service 文件失败: %w", err)
+	}
+
+	if err := systemctl("daemon-reload", ""); err != nil {
+		m.logger.WithError(err).Warn("systemctl daemon-reload 失败")
+	}
+	if err := exec.Command("systemctl", "enable", m.xray.ServiceName).Run(); err != nil {
+		m.logger.WithError(err).Warn("systemctl enable xray 失败")
+	}
+
+	return nil
 }
 
 func (m *Manager) installSingBox(ctx context.Context) error {
 	tasks := []downloader.DownloadTask{
 		{URL: m.singbox.DownloadURL(), DestPath: m.singbox.BinaryPath, Name: "sing-box"},
 	}
-	return downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
+	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
 		m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
-	})
+	}); err != nil {
+		return err
+	}
+
+	// 设置可执行权限
+	if err := os.Chmod(m.singbox.BinaryPath, 0755); err != nil {
+		m.logger.WithError(err).Warn("设置 sing-box 可执行权限失败")
+	}
+
+	// 创建配置目录
+	os.MkdirAll(m.singbox.ConfDir, 0755)
+
+	// 安装 systemd service 文件
+	return m.installSingBoxService()
+}
+
+// installSingBoxService 创建 sing-box systemd service 文件
+func (m *Manager) installSingBoxService() error {
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=sing-box Service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target
+
+[Service]
+Type=simple
+ExecStart=%s run -C %s
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+`, m.singbox.BinaryPath, m.singbox.ConfDir)
+
+	servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return fmt.Errorf("创建 sing-box service 文件失败: %w", err)
+	}
+
+	if err := systemctl("daemon-reload", ""); err != nil {
+		m.logger.WithError(err).Warn("systemctl daemon-reload 失败")
+	}
+	if err := exec.Command("systemctl", "enable", m.singbox.ServiceName).Run(); err != nil {
+		m.logger.WithError(err).Warn("systemctl enable sing-box 失败")
+	}
+
+	return nil
 }
 
 // 辅助函数
 
 func systemctl(action, service string) error {
+	if service == "" {
+		return exec.Command("systemctl", action).Run()
+	}
 	return exec.Command("systemctl", action, service).Run()
 }
 
