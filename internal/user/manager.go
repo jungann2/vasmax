@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"vasmax/internal/api"
 	"vasmax/internal/security"
@@ -283,7 +284,7 @@ func (m *Manager) RecoverFromXrayConfigs(xrayConfDir string) error {
 		if entry.IsDir() || !isInboundFile(entry.Name()) {
 			continue
 		}
-		data, err := os.ReadFile(xrayConfDir + "/" + entry.Name())
+		data, err := os.ReadFile(filepath.Join(xrayConfDir, entry.Name()))
 		if err != nil {
 			continue
 		}

@@ -439,7 +439,7 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 	serverIP := getServerIP()
 
 	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
-	PrintInfo(fmt.Sprintf("端口: 443"))
+	PrintInfo("端口: 443")
 	PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
 	PrintInfo(fmt.Sprintf("PublicKey: %s", m.config.Reality.PublicKey))
 	PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
