@@ -2,9 +2,11 @@ package menu
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
+	"vasmax/internal/bbr"
 	"vasmax/internal/config"
 	"vasmax/internal/core"
 	"vasmax/internal/firewall"
@@ -21,6 +23,7 @@ import (
 type MainMenu struct {
 	config    *config.Config
 	coreMgr   *core.Manager
+	registry  *protocol.Registry
 	logger    *logrus.Logger
 	install   *InstallMenu
 	account   *AccountMenu
@@ -54,6 +57,7 @@ func NewMainMenu(
 	return &MainMenu{
 		config:    cfg,
 		coreMgr:   coreMgr,
+		registry:  reg,
 		logger:    logger,
 		install:   NewInstallMenu(cfg, coreMgr, reg, rbMgr, nginxMgr, userMgr, subMgr, logger),
 		account:   NewAccountMenu(userMgr, subMgr),
@@ -121,21 +125,53 @@ func (m *MainMenu) printHeader() {
 		PrintInfo("运行模式: " + Cyan("[Xboard2 托管模式]"))
 	}
 
-	// 显示核心状态
+	// 显示核心状态（只显示已安装的核心）
 	status := m.coreMgr.GetStatus()
-	for name, s := range status {
-		if s.Installed {
-			state := Red("已停止")
-			if s.Running {
-				state = Green("运行中")
+	if xs, ok := status["xray"]; ok && xs.Installed {
+		state := Red("已停止")
+		if xs.Running {
+			state = Green("运行中")
+		}
+		PrintInfo(fmt.Sprintf("Xray: %s v%s", state, xs.Version))
+	}
+	if ss, ok := status["singbox"]; ok && ss.Installed {
+		state := Red("已停止")
+		if ss.Running {
+			state = Green("运行中")
+		}
+		PrintInfo(fmt.Sprintf("sing-box: %s v%s", state, ss.Version))
+	}
+
+	// 显示已安装协议列表
+	if len(m.config.Protocols) > 0 {
+		var protoList []string
+		for _, pName := range m.config.Protocols {
+			label := pName
+			if p, ok := m.registry.Get(pName); ok {
+				label = fmt.Sprintf("%s %s", pName, protocolLabel(p))
 			}
-			PrintInfo(fmt.Sprintf("%s: %s v%s", name, state, s.Version))
+			mode := inferProtocolMode(m.config.ProtocolModes, pName)
+			switch mode {
+			case "domain":
+				label += Green(" [绑定域名]")
+			case "nodomain":
+				label += Cyan(" [无域名]")
+			}
+			protoList = append(protoList, label)
+		}
+		PrintInfo(fmt.Sprintf("已安装协议（%d 个）:", len(m.config.Protocols)))
+		for _, p := range protoList {
+			PrintInfo(fmt.Sprintf("  · %s", p))
 		}
 	}
 
-	// 显示已安装协议
-	if len(m.config.Protocols) > 0 {
-		PrintInfo(fmt.Sprintf("已安装协议: %d 个", len(m.config.Protocols)))
+	// 显示 BBR 状态
+	cc := bbr.CurrentCC()
+	qdisc := bbr.CurrentQdisc()
+	if strings.Contains(cc, "bbr") {
+		PrintInfo(fmt.Sprintf("BBR: %s（%s + %s）", Green("已启用"), cc, qdisc))
+	} else {
+		PrintInfo(fmt.Sprintf("BBR: %s（当前: %s + %s）", Yellow("未启用"), cc, qdisc))
 	}
 
 	// 显示 TLS 证书状态
