@@ -84,7 +84,7 @@ func (m *InstallMenu) installCombination() {
 				mode := inferProtocolMode(m.config.ProtocolModes, p.Name())
 				switch mode {
 				case "nodomain":
-					installed = Yellow(" [已安装无域名版本]")
+					installed = Yellow(" [已安装无域名版本，安装会覆盖]")
 				case "domain":
 					installed = Green(" [已安装绑定域名版本]")
 				}
@@ -237,7 +237,7 @@ func (m *InstallMenu) installReality() {
 				mode := inferProtocolMode(m.config.ProtocolModes, p.Name())
 				switch mode {
 				case "domain":
-					installed = Yellow(" [已安装绑定域名版本]")
+					installed = Yellow(" [已安装绑定域名版本，安装会覆盖]")
 				case "nodomain":
 					installed = Green(" [已安装无域名版本]")
 				}
