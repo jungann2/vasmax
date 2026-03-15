@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func (m *MonitorMenu) Show() {
 		PrintTitle("实时监控")
 		PrintOption(1, "用户流量统计（Xray Stats API）")
 		PrintOption(2, "当前活跃连接")
-		PrintOption(3, "实时连接监控（持续刷新，Ctrl+C 退出）")
+		PrintOption(3, "实时连接监控（自动刷新 10 次）")
 		PrintOptionStr("0", "返回上级菜单")
 
 		choice := ReadChoice("请选择", []string{"1", "2", "3"})
@@ -55,7 +56,6 @@ const statsAPIAddr = "127.0.0.1:10085"
 // ensureStatsAPI 确保 Stats API 配置存在并重启 Xray
 func (m *MonitorMenu) ensureStatsAPI() bool {
 	confDir := m.config.Paths.XrayConf
-	// 检查 01_api.json 是否存在
 	apiFile := confDir + "/01_api.json"
 	statsFile := confDir + "/06_stats.json"
 	needRestart := false
@@ -86,14 +86,21 @@ func (m *MonitorMenu) ensureStatsAPI() bool {
 	return true
 }
 
-// xrayStatsQuery 查询 Xray Stats API
+// statEntry Xray Stats API 返回的统计条目
+// Xray 输出 value 为字符串类型（如 "1176"）
 type statEntry struct {
 	Name  string `json:"name"`
-	Value int64  `json:"value"`
+	Value string `json:"value"`
 }
 
 type statsResponse struct {
 	Stat []statEntry `json:"stat"`
+}
+
+// statValue 将字符串 value 转为 int64
+func statValue(s statEntry) int64 {
+	v, _ := strconv.ParseInt(s.Value, 10, 64)
+	return v
 }
 
 func (m *MonitorMenu) queryStats(pattern string) ([]statEntry, error) {
@@ -105,16 +112,67 @@ func (m *MonitorMenu) queryStats(pattern string) ([]statEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %s", err, string(out))
 	}
-	// xray api statsquery 输出 JSON
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "{}" || trimmed == "" {
+		return nil, nil
+	}
 	var resp statsResponse
 	if err := json.Unmarshal(out, &resp); err != nil {
-		// 可能输出为空（无数据）
-		if strings.TrimSpace(string(out)) == "{}" || strings.TrimSpace(string(out)) == "" {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("解析统计数据失败: %v (原始: %s)", err, string(out))
+		return nil, fmt.Errorf("解析统计数据失败: %v (原始: %s)", err, trimmed)
 	}
 	return resp.Stat, nil
+}
+
+// userTraffic 用户流量聚合
+type userTraffic struct {
+	Upload   int64
+	Download int64
+}
+
+// aggregateUserStats 从 stats 中聚合用户流量
+func aggregateUserStats(stats []statEntry) map[string]*userTraffic {
+	m := make(map[string]*userTraffic)
+	for _, s := range stats {
+		parts := strings.Split(s.Name, ">>>")
+		if len(parts) != 4 || parts[0] != "user" {
+			continue
+		}
+		name := parts[1]
+		if _, ok := m[name]; !ok {
+			m[name] = &userTraffic{}
+		}
+		val := statValue(s)
+		switch parts[3] {
+		case "uplink":
+			m[name].Upload += val
+		case "downlink":
+			m[name].Download += val
+		}
+	}
+	return m
+}
+
+// aggregateInboundStats 从 stats 中聚合入站流量
+func aggregateInboundStats(stats []statEntry) map[string]*userTraffic {
+	m := make(map[string]*userTraffic)
+	for _, s := range stats {
+		parts := strings.Split(s.Name, ">>>")
+		if len(parts) != 4 || parts[0] != "inbound" {
+			continue
+		}
+		tag := parts[1]
+		if _, ok := m[tag]; !ok {
+			m[tag] = &userTraffic{}
+		}
+		val := statValue(s)
+		switch parts[3] {
+		case "uplink":
+			m[tag].Upload += val
+		case "downlink":
+			m[tag].Download += val
+		}
+	}
+	return m
 }
 
 // showUserStats 显示用户流量统计
@@ -137,42 +195,17 @@ func (m *MonitorMenu) showUserStats() {
 		return
 	}
 
-	// 按用户聚合上行/下行
-	type userTraffic struct {
-		Upload   int64
-		Download int64
-	}
-	userMap := make(map[string]*userTraffic)
+	userMap := aggregateUserStats(stats)
 
-	for _, s := range stats {
-		// 格式: user>>>email>>>traffic>>>uplink 或 user>>>email>>>traffic>>>downlink
-		// 或: inbound>>>tag>>>traffic>>>uplink
-		parts := strings.Split(s.Name, ">>>")
-		if len(parts) != 4 {
-			continue
-		}
-		category := parts[0]
-		name := parts[1]
-		direction := parts[3]
-
-		if category == "user" {
-			if _, ok := userMap[name]; !ok {
-				userMap[name] = &userTraffic{}
-			}
-			switch direction {
-			case "uplink":
-				userMap[name].Upload += s.Value
-			case "downlink":
-				userMap[name].Download += s.Value
-			}
-		}
-	}
-
-	// 构建用户 email -> 显示名映射
+	// 构建 email -> 显示名映射
 	users := m.userMgr.GetAllUsers()
 	emailToDisplay := make(map[string]string)
 	for _, u := range users {
-		emailToDisplay[u.Email] = fmt.Sprintf("%s (%s)", u.Email, u.UUID[:8])
+		short := u.UUID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		emailToDisplay[u.Email] = fmt.Sprintf("%s (%s)", u.Email, short)
 	}
 
 	if len(userMap) == 0 {
@@ -187,36 +220,14 @@ func (m *MonitorMenu) showUserStats() {
 			}
 			total := t.Upload + t.Download
 			fmt.Printf("  %-30s %12s %12s %12s\n",
-				display,
-				formatBytes(t.Upload),
-				formatBytes(t.Download),
-				formatBytes(total),
-			)
+				display, formatBytes(t.Upload), formatBytes(t.Download), formatBytes(total))
 		}
 	}
 
-	// 也显示入站流量
+	// 入站流量
 	fmt.Println()
 	PrintInfo("入站流量统计:")
-	inboundMap := make(map[string]*userTraffic)
-	for _, s := range stats {
-		parts := strings.Split(s.Name, ">>>")
-		if len(parts) != 4 || parts[0] != "inbound" {
-			continue
-		}
-		tag := parts[1]
-		direction := parts[3]
-		if _, ok := inboundMap[tag]; !ok {
-			inboundMap[tag] = &userTraffic{}
-		}
-		switch direction {
-		case "uplink":
-			inboundMap[tag].Upload += s.Value
-		case "downlink":
-			inboundMap[tag].Download += s.Value
-		}
-	}
-
+	inboundMap := aggregateInboundStats(stats)
 	if len(inboundMap) > 0 {
 		fmt.Printf("  %-30s %12s %12s %12s\n", "入站标签", "上行", "下行", "合计")
 		fmt.Println("  " + strings.Repeat("─", 68))
@@ -233,7 +244,6 @@ func (m *MonitorMenu) showUserStats() {
 func (m *MonitorMenu) showActiveConnections() {
 	PrintTitle("当前活跃连接")
 
-	// 使用 ss 查看连接到 Xray 监听端口的 TCP 连接
 	out, err := exec.Command("ss", "-tnp").Output()
 	if err != nil {
 		PrintError(fmt.Sprintf("获取连接信息失败: %v", err))
@@ -261,7 +271,6 @@ func (m *MonitorMenu) showActiveConnections() {
 		local := fields[3]
 		remote := fields[4]
 
-		// 提取源 IP（去掉端口）
 		srcIP := remote
 		if idx := strings.LastIndex(remote, ":"); idx > 0 {
 			srcIP = remote[:idx]
@@ -280,14 +289,12 @@ func (m *MonitorMenu) showActiveConnections() {
 	PrintInfo(fmt.Sprintf("活跃连接数: %d", len(conns)))
 	fmt.Println()
 
-	// 按源 IP 汇总
 	fmt.Printf("  %-40s %s\n", "来源 IP", "连接数")
 	fmt.Println("  " + strings.Repeat("─", 50))
 	for ip, count := range sourceCount {
 		fmt.Printf("  %-40s %d\n", ip, count)
 	}
 
-	// 显示详细连接（最多 30 条）
 	fmt.Println()
 	PrintInfo("连接详情（最多显示 30 条）:")
 	fmt.Printf("  %-8s %-25s %-25s\n", "状态", "来源", "本地")
@@ -307,71 +314,43 @@ func (m *MonitorMenu) showActiveConnections() {
 	fmt.Println()
 }
 
-// liveMonitor 实时连接监控（持续刷新）
+// liveMonitor 实时连接监控
+// 自动刷新 10 次（约 30 秒），结束后询问是否继续
+// 避免使用 goroutine 读取 stdin 导致泄漏
 func (m *MonitorMenu) liveMonitor() {
-	PrintInfo("实时监控已启动，每 3 秒刷新一次，按 Ctrl+C 返回菜单")
-	fmt.Println()
-
 	if !m.ensureStatsAPI() {
 		return
 	}
 
-	// 使用 goroutine 监听用户输入来退出
-	stopCh := make(chan struct{})
-	go func() {
-		ReadInput("按回车键退出监控")
-		close(stopCh)
-	}()
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	// 先显示一次
-	m.printLiveStatus()
+	const refreshCount = 10
+	const interval = 3 * time.Second
 
 	for {
-		select {
-		case <-ticker.C:
-			m.printLiveStatus()
-		case <-stopCh:
-			fmt.Println()
-			PrintSuccess("已退出实时监控")
+		for i := range refreshCount {
+			m.printLiveStatus(i+1, refreshCount)
+			if i < refreshCount-1 {
+				time.Sleep(interval)
+			}
+		}
+
+		fmt.Println()
+		if !Confirm("继续监控？") {
 			return
 		}
 	}
 }
 
 // printLiveStatus 打印一次实时状态
-func (m *MonitorMenu) printLiveStatus() {
+func (m *MonitorMenu) printLiveStatus(current, total int) {
 	// 清屏
 	fmt.Print("\033[2J\033[H")
 
 	now := time.Now().Format("2006-01-02 15:04:05")
-	fmt.Printf("  %s 实时监控  %s  （按回车退出）\n\n", Cyan("▶"), now)
+	fmt.Printf("  %s 实时监控  %s  （%d/%d）\n\n", Cyan("▶"), now, current, total)
 
-	// 1. 用户流量
+	// 用户流量
 	stats, _ := m.queryStats("")
-	type userTraffic struct {
-		Upload   int64
-		Download int64
-	}
-	userMap := make(map[string]*userTraffic)
-	for _, s := range stats {
-		parts := strings.Split(s.Name, ">>>")
-		if len(parts) != 4 || parts[0] != "user" {
-			continue
-		}
-		name := parts[1]
-		if _, ok := userMap[name]; !ok {
-			userMap[name] = &userTraffic{}
-		}
-		switch parts[3] {
-		case "uplink":
-			userMap[name].Upload += s.Value
-		case "downlink":
-			userMap[name].Download += s.Value
-		}
-	}
+	userMap := aggregateUserStats(stats)
 
 	fmt.Printf("  %s 用户流量:\n", Yellow("━"))
 	if len(userMap) == 0 {
@@ -383,7 +362,7 @@ func (m *MonitorMenu) printLiveStatus() {
 		}
 	}
 
-	// 2. 活跃连接
+	// 活跃连接
 	fmt.Println()
 	out, err := exec.Command("ss", "-tnp").Output()
 	connCount := 0

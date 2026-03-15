@@ -784,6 +784,8 @@ func (m *InstallMenu) uninstallProtocol() {
 			}
 		} else {
 			PrintInfo("已无 Xray 协议，正在停止 Xray...")
+			// 清理 Stats API 配置
+			_ = protocol.RemoveStatsAPIConfig(m.config.Paths.XrayConf)
 			m.coreMgr.StopAll() // StopAll 会安全跳过未安装的
 			PrintSuccess("Xray 已停止")
 		}
