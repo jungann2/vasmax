@@ -142,11 +142,22 @@ func (m *Manager) uninstallCore(serviceName, binaryPath string) error {
 // StartAll 启动所有已安装的核心
 func (m *Manager) StartAll() error {
 	if fileExists(m.xray.BinaryPath) {
+		// 确保 service 文件存在
+		servicePath := "/etc/systemd/system/" + m.xray.ServiceName
+		if !fileExists(servicePath) {
+			m.installXrayService()
+		}
+		os.Chmod(m.xray.BinaryPath, 0755)
 		if err := systemctl("start", m.xray.ServiceName); err != nil {
 			m.logger.WithError(err).Error("启动 Xray 失败")
 		}
 	}
 	if fileExists(m.singbox.BinaryPath) {
+		servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
+		if !fileExists(servicePath) {
+			m.installSingBoxService()
+		}
+		os.Chmod(m.singbox.BinaryPath, 0755)
 		if err := systemctl("start", m.singbox.ServiceName); err != nil {
 			m.logger.WithError(err).Error("启动 sing-box 失败")
 		}
@@ -166,8 +177,16 @@ func (m *Manager) ReloadXray() error {
 	return exec.Command("killall", "-USR1", "xray").Run()
 }
 
-// RestartXray 重启 Xray-core
+// RestartXray 重启 Xray-core（自动确保 service 文件存在）
 func (m *Manager) RestartXray() error {
+	servicePath := "/etc/systemd/system/" + m.xray.ServiceName
+	if !fileExists(servicePath) {
+		if err := m.installXrayService(); err != nil {
+			return fmt.Errorf("创建 Xray service 失败: %w", err)
+		}
+	}
+	// 确保二进制有可执行权限
+	os.Chmod(m.xray.BinaryPath, 0755)
 	return systemctl("restart", m.xray.ServiceName)
 }
 
@@ -176,8 +195,16 @@ func (m *Manager) MergeSingBoxConfig() error {
 	return m.singbox.MergeConfig()
 }
 
-// RestartSingBox 重启 sing-box
+// RestartSingBox 重启 sing-box（自动确保 service 文件存在）
 func (m *Manager) RestartSingBox() error {
+	servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
+	if !fileExists(servicePath) {
+		if err := m.installSingBoxService(); err != nil {
+			return fmt.Errorf("创建 sing-box service 失败: %w", err)
+		}
+	}
+	// 确保二进制有可执行权限
+	os.Chmod(m.singbox.BinaryPath, 0755)
 	return systemctl("restart", m.singbox.ServiceName)
 }
 
