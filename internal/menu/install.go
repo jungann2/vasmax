@@ -86,7 +86,14 @@ func (m *InstallMenu) installCombination() {
 		installed := ""
 		for _, ip := range m.config.Protocols {
 			if ip == p.Name() {
-				installed = Green(" [已安装]")
+				mode := m.config.ProtocolModes[p.Name()]
+				if mode == "nodomain" {
+					installed = Yellow(" [已安装无域名版本]")
+				} else if mode == "domain" {
+					installed = Green(" [已安装绑定域名版本]")
+				} else {
+					installed = Green(" [已安装]")
+				}
 				break
 			}
 		}
@@ -168,6 +175,11 @@ func (m *InstallMenu) installCombination() {
 		if !found {
 			m.config.Protocols = append(m.config.Protocols, p.Name())
 		}
+		// 记录安装模式为绑定域名
+		if m.config.ProtocolModes == nil {
+			m.config.ProtocolModes = make(map[string]string)
+		}
+		m.config.ProtocolModes[p.Name()] = "domain"
 
 		_ = domain // Used in config generation
 		PrintSuccess(fmt.Sprintf("%s 安装完成", p.Name()))
@@ -215,7 +227,14 @@ func (m *InstallMenu) installReality() {
 		installed := ""
 		for _, ip := range m.config.Protocols {
 			if ip == p.Name() {
-				installed = Green(" [已安装]")
+				mode := m.config.ProtocolModes[p.Name()]
+				if mode == "domain" {
+					installed = Yellow(" [已安装绑定域名版本]")
+				} else if mode == "nodomain" {
+					installed = Green(" [已安装无域名版本]")
+				} else {
+					installed = Green(" [已安装]")
+				}
 				break
 			}
 		}
@@ -303,6 +322,11 @@ func (m *InstallMenu) installReality() {
 		if !found {
 			m.config.Protocols = append(m.config.Protocols, p.Name())
 		}
+		// 记录安装模式为无域名
+		if m.config.ProtocolModes == nil {
+			m.config.ProtocolModes = make(map[string]string)
+		}
+		m.config.ProtocolModes[p.Name()] = "nodomain"
 	}
 
 	// 6. 自动创建默认用户（如果没有用户）
@@ -517,7 +541,14 @@ func (m *InstallMenu) showInstalled() {
 		return
 	}
 	for i, p := range m.config.Protocols {
-		PrintOption(i+1, p)
+		mode := m.config.ProtocolModes[p]
+		modeStr := ""
+		if mode == "domain" {
+			modeStr = Green(" (绑定域名)")
+		} else if mode == "nodomain" {
+			modeStr = Cyan(" (无域名)")
+		}
+		PrintOption(i+1, p+modeStr)
 	}
 }
 
@@ -545,6 +576,7 @@ func (m *InstallMenu) uninstallProtocol() {
 
 	// 移除协议
 	m.config.Protocols = append(m.config.Protocols[:idx-1], m.config.Protocols[idx:]...)
+	delete(m.config.ProtocolModes, name)
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return

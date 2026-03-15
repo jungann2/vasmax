@@ -25,6 +25,7 @@ type Config struct {
 	Audit             AuditConfig        `yaml:"audit"`
 	Lang              string             `yaml:"lang"`
 	Protocols         []string           `yaml:"protocols"`
+	ProtocolModes     map[string]string  `yaml:"protocol_modes"` // 协议安装模式: "domain" 或 "nodomain"
 	CoreType          string             `yaml:"core_type"`
 	CDN               CDNConfig          `yaml:"cdn"`
 	Subscription      SubscriptionConfig `yaml:"subscription"`
@@ -153,6 +154,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Paths.NginxConf == "" {
 		c.Paths.NginxConf = "/etc/nginx/conf.d/"
+	}
+	if c.ProtocolModes == nil {
+		c.ProtocolModes = make(map[string]string)
 	}
 }
 
