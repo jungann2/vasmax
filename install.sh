@@ -397,6 +397,23 @@ uninstall() {
     rm -f "${SERVICE_FILE}"
     rm -f /usr/local/bin/vasmax
 
+    # 清理 BBR/sysctl 配置文件
+    rm -f /etc/sysctl.d/99-vasmax-bbr.conf
+    rm -f /etc/sysctl.d/99-vasmax-optimize.conf
+    rm -f /etc/sysctl.d/99-vasmax-ipv6.conf
+    sysctl --system &>/dev/null || true
+
+    # 清理 iptables NAT 端口跳跃规则（如有）
+    if command -v iptables &>/dev/null; then
+        iptables -t nat -F PREROUTING 2>/dev/null || true
+    fi
+
+    # 清理 VasmaX 生成的 Nginx 配置（完全清除模式下删除 conf.d 中的域名配置）
+    if [[ "${1:-}" == "--purge" ]] && [[ -d /etc/nginx/conf.d/ ]]; then
+        rm -f /etc/nginx/conf.d/*.conf 2>/dev/null || true
+        yellow "已清理 Nginx 配置文件"
+    fi
+
     # 删除配置和数据（需确认）
     if [[ "${1:-}" == "--purge" ]]; then
         rm -rf "${CONFIG_DIR}"
@@ -409,8 +426,11 @@ uninstall() {
     # 询问是否卸载 Nginx
     uninstall_nginx
 
+    # 删除安装脚本自身
+    rm -f /root/install.sh 2>/dev/null || true
+
     systemctl daemon-reload
-    green "VasmaX 已卸载（含 Xray-core 和 sing-box）"
+    green "VasmaX 已卸载（含 Xray-core、sing-box、BBR 配置）"
     yellow "注意: acme.sh 证书配置未被移除"
     yellow "如需清理请手动执行: ~/.acme.sh/acme.sh --uninstall"
 }
