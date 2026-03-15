@@ -292,7 +292,11 @@ func (m *Manager) RecoverFromXrayConfigs(xrayConfDir string) error {
 			if m.GetUserByUUID(uuid) != nil {
 				continue
 			}
-			email := fmt.Sprintf("user_%s", uuid[:8])
+			short := uuid
+			if len(short) > 8 {
+				short = short[:8]
+			}
+			email := fmt.Sprintf("user_%s", short)
 			_ = m.AddLocalUser(uuid, email)
 			recovered++
 		}

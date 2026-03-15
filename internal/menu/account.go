@@ -53,7 +53,11 @@ func (m *AccountMenu) addUser() {
 
 	email := ReadInput("请输入邮箱标识（留空使用默认）")
 	if email == "" {
-		email = fmt.Sprintf("user_local_%s", uuid[:8])
+		short := uuid
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		email = fmt.Sprintf("user_local_%s", short)
 	}
 
 	if err := m.userMgr.AddLocalUser(uuid, email); err != nil {

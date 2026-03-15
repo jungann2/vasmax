@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -56,8 +57,8 @@ const statsAPIAddr = "127.0.0.1:10085"
 // ensureStatsAPI 确保 Stats API 配置存在并重启 Xray
 func (m *MonitorMenu) ensureStatsAPI() bool {
 	confDir := m.config.Paths.XrayConf
-	apiFile := confDir + "/01_api.json"
-	statsFile := confDir + "/06_stats.json"
+	apiFile := filepath.Join(confDir, "01_api.json")
+	statsFile := filepath.Join(confDir, "06_stats.json")
 	needRestart := false
 
 	if !fileExists(apiFile) || !fileExists(statsFile) {
@@ -198,6 +199,9 @@ func (m *MonitorMenu) showUserStats() {
 	userMap := aggregateUserStats(stats)
 
 	// 构建 email -> 显示名映射
+	// Xray 配置中 email 格式为 "user_{ID}"（如 user_-1），
+	// 而本地用户的 Email 字段可能是 "user_ae88d5ea" 等自定义格式
+	// 需要同时建立两种映射
 	users := m.userMgr.GetAllUsers()
 	emailToDisplay := make(map[string]string)
 	for _, u := range users {
@@ -205,7 +209,11 @@ func (m *MonitorMenu) showUserStats() {
 		if len(short) > 8 {
 			short = short[:8]
 		}
-		emailToDisplay[u.Email] = fmt.Sprintf("%s (%s)", u.Email, short)
+		display := fmt.Sprintf("%s (%s)", u.Email, short)
+		emailToDisplay[u.Email] = display
+		// Xray 配置中使用 "user_{ID}" 格式
+		xrayEmail := fmt.Sprintf("user_%d", u.ID)
+		emailToDisplay[xrayEmail] = display
 	}
 
 	if len(userMap) == 0 {
