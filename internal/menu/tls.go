@@ -216,6 +216,12 @@ func (m *TLSMenu) issueCert() {
 	}
 
 	PrintSuccess(fmt.Sprintf("证书已申请并安装到 %s", tlsDir))
+	fmt.Println()
+	PrintInfo("证书文件路径:")
+	PrintInfo(fmt.Sprintf("  证书文件:   %s", filepath.Join(tlsDir, domain+".crt")))
+	PrintInfo(fmt.Sprintf("  完整链证书: %s", filepath.Join(tlsDir, domain+".fullchain.crt")))
+	PrintInfo(fmt.Sprintf("  私钥文件:   %s", keyPath))
+	fmt.Println()
 	PrintInfo("acme.sh 已配置自动续期（cron job），续期后自动重启服务")
 }
 
@@ -245,6 +251,23 @@ func (m *TLSMenu) renewCert() {
 	}
 
 	PrintSuccess("证书续期成功")
+
+	// 列出证书文件路径
+	tlsDir := config.DefaultTLSDir
+	certFile := filepath.Join(tlsDir, domain+".crt")
+	fullchainFile := filepath.Join(tlsDir, domain+".fullchain.crt")
+	keyFile := filepath.Join(tlsDir, domain+".key")
+	fmt.Println()
+	PrintInfo("证书文件路径:")
+	if fileExists(certFile) {
+		PrintInfo(fmt.Sprintf("  证书文件:   %s", certFile))
+	}
+	if fileExists(fullchainFile) {
+		PrintInfo(fmt.Sprintf("  完整链证书: %s", fullchainFile))
+	}
+	if fileExists(keyFile) {
+		PrintInfo(fmt.Sprintf("  私钥文件:   %s", keyFile))
+	}
 }
 
 func (m *TLSMenu) switchProvider() {

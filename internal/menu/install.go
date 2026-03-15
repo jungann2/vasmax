@@ -205,6 +205,18 @@ func (m *InstallMenu) installCombination() {
 		}
 	}
 
+	// 显示证书文件路径
+	if m.config.TLS.CertFile != "" || m.config.TLS.KeyFile != "" {
+		fmt.Println()
+		PrintInfo("TLS 证书文件路径:")
+		if m.config.TLS.CertFile != "" {
+			PrintInfo(fmt.Sprintf("  证书文件: %s", m.config.TLS.CertFile))
+		}
+		if m.config.TLS.KeyFile != "" {
+			PrintInfo(fmt.Sprintf("  私钥文件: %s", m.config.TLS.KeyFile))
+		}
+	}
+
 	// 清理快照
 	if snap != nil {
 		m.rollbackMgr.CleanSnapshot(snap)
