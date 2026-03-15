@@ -41,13 +41,15 @@ func (m *CoreMenu) Show() {
 		PrintOption(2, "更新 sing-box")
 		PrintOption(3, "回滚 Xray-core")
 		PrintOption(4, "回滚 sing-box")
-		PrintOption(5, "更新 GeoData")
-		PrintOption(6, "重启所有核心")
-		PrintOption(7, "停止所有核心")
-		PrintOption(8, "自更新 VasmaX")
+		PrintOption(5, "卸载 Xray-core")
+		PrintOption(6, "卸载 sing-box")
+		PrintOption(7, "更新 GeoData")
+		PrintOption(8, "重启所有核心")
+		PrintOption(9, "停止所有核心")
+		PrintOption(10, "自更新 VasmaX")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6", "7", "8"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"})
 		switch choice {
 		case "1":
 			m.updateCore("xray")
@@ -58,20 +60,24 @@ func (m *CoreMenu) Show() {
 		case "4":
 			m.rollbackCore("singbox")
 		case "5":
-			m.updateGeoData()
+			m.uninstallCore("xray")
 		case "6":
+			m.uninstallCore("singbox")
+		case "7":
+			m.updateGeoData()
+		case "8":
 			if err := m.coreMgr.StartAll(); err != nil {
 				PrintError(fmt.Sprintf("启动失败: %v", err))
 			} else {
 				PrintSuccess("所有核心已启动")
 			}
-		case "7":
+		case "9":
 			if err := m.coreMgr.StopAll(); err != nil {
 				PrintError(fmt.Sprintf("停止失败: %v", err))
 			} else {
 				PrintSuccess("所有核心已停止")
 			}
-		case "8":
+		case "10":
 			PrintInfo("自更新功能 - TODO")
 		case "0":
 			return
@@ -110,5 +116,23 @@ func (m *CoreMenu) updateGeoData() {
 		PrintError(fmt.Sprintf("更新失败: %v", err))
 	} else {
 		PrintSuccess("GeoData 更新完成")
+	}
+}
+
+func (m *CoreMenu) uninstallCore(coreType string) {
+	status := m.coreMgr.GetStatus()
+	cs, ok := status[coreType]
+	if !ok || !cs.Installed {
+		PrintWarning(fmt.Sprintf("%s 未安装，无需卸载", coreType))
+		return
+	}
+	if !Confirm(fmt.Sprintf("确认卸载 %s? 将停止服务并删除二进制文件", coreType)) {
+		return
+	}
+	PrintInfo(fmt.Sprintf("正在卸载 %s...", coreType))
+	if err := m.coreMgr.UninstallCore(coreType); err != nil {
+		PrintError(fmt.Sprintf("卸载失败: %v", err))
+	} else {
+		PrintSuccess(fmt.Sprintf("%s 已卸载", coreType))
 	}
 }

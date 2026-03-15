@@ -103,6 +103,42 @@ func (m *Manager) RollbackCore(coreType string) error {
 	}
 }
 
+// UninstallCore 卸载指定核心（停止服务 → 删除 service → 删除二进制）
+func (m *Manager) UninstallCore(coreType string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch coreType {
+	case "xray":
+		return m.uninstallCore(m.xray.ServiceName, m.xray.BinaryPath)
+	case "singbox":
+		return m.uninstallCore(m.singbox.ServiceName, m.singbox.BinaryPath)
+	default:
+		return fmt.Errorf("未知核心类型: %s", coreType)
+	}
+}
+
+func (m *Manager) uninstallCore(serviceName, binaryPath string) error {
+	// 1. 停止服务
+	systemctl("stop", serviceName)
+
+	// 2. 禁用服务
+	exec.Command("systemctl", "disable", serviceName).Run()
+
+	// 3. 删除 service 文件
+	servicePath := "/etc/systemd/system/" + serviceName
+	os.Remove(servicePath)
+
+	// 4. daemon-reload
+	systemctl("daemon-reload", "")
+
+	// 5. 删除二进制文件
+	os.Remove(binaryPath)
+	os.Remove(binaryPath + ".bak")
+
+	return nil
+}
+
 // StartAll 启动所有已安装的核心
 func (m *Manager) StartAll() error {
 	if fileExists(m.xray.BinaryPath) {
