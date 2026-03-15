@@ -96,9 +96,9 @@ func (c *Config) Validate() error {
 
 	// 9. Validate CoreType if set.
 	if c.CoreType != "" {
-		validCoreTypes := map[string]bool{"xray": true, "singbox": true}
+		validCoreTypes := map[string]bool{"xray": true, "singbox": true, "dual": true}
 		if !validCoreTypes[c.CoreType] {
-			errs = append(errs, fmt.Sprintf("core_type: must be xray or singbox, got %q", c.CoreType))
+			errs = append(errs, fmt.Sprintf("core_type: must be xray, singbox or dual, got %q", c.CoreType))
 		}
 	}
 
