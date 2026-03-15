@@ -116,9 +116,9 @@ func (m *TLSMenu) issueCert() {
 
 	// 选择 CA 提供商
 	fmt.Println()
-	PrintOption(1, "Let's Encrypt（推荐）")
-	PrintOption(2, "Buypass")
-	PrintOption(3, "ZeroSSL")
+	PrintOption(1, "Let's Encrypt（推荐，证书有效期 90 天，到期前自动续期）")
+	PrintOption(2, "Buypass（证书有效期 180 天，到期前自动续期）")
+	PrintOption(3, "ZeroSSL（证书有效期 90 天，到期前自动续期）")
 	provider := ReadChoice("选择证书提供商", []string{"1", "2", "3"})
 	var caServer string
 	switch provider {
@@ -134,11 +134,11 @@ func (m *TLSMenu) issueCert() {
 
 	// 选择验证方式
 	fmt.Println()
-	PrintOption(1, "standalone（需要 80 端口空闲）")
-	PrintOption(2, "Nginx webroot（80 端口已被 Nginx 占用时使用）")
-	PrintOption(3, "Cloudflare DNS API")
-	PrintOption(4, "阿里云 DNS API")
-	PrintOption(5, "Cloudflare DNS 通配符证书")
+	PrintOption(1, "standalone（需要 80 端口空闲，申请和续期时临时占用几秒）")
+	PrintOption(2, "Nginx webroot（80 端口已被 Nginx 占用时使用，续期无需停 Nginx）")
+	PrintOption(3, "Cloudflare DNS API（无需开放 80 端口，域名 DNS 需托管在 Cloudflare）")
+	PrintOption(4, "阿里云 DNS API（无需开放 80 端口，域名 DNS 需托管在阿里云）")
+	PrintOption(5, "Cloudflare DNS 通配符证书（申请 *.域名，需 Cloudflare DNS）")
 	mode := ReadChoice("选择验证方式", []string{"1", "2", "3", "4", "5"})
 
 	var args []string
