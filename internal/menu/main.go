@@ -170,7 +170,7 @@ func (m *MainMenu) printOptions() {
 	PrintOption(10, "核心管理")
 	PrintOption(11, "Xboard2 对接管理")
 	PrintOption(12, "TLS 证书管理")
-	PrintOption(13, "其他工具")
+	PrintOption(13, "其他工具（BBR/CDN管理/伪装站管理/健康检查）")
 	PrintOptionStr("0", "退出")
 	fmt.Println()
 }
