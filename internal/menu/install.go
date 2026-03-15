@@ -582,6 +582,62 @@ func (m *InstallMenu) showInstalled() {
 		}
 		PrintOption(i+1, p+modeStr)
 	}
+
+	// 显示所有协议的连接信息
+	users := m.userMgr.GetAllUsers()
+	if len(users) == 0 {
+		fmt.Println()
+		PrintWarning("暂无用户，请先在账号管理中添加用户")
+		return
+	}
+
+	serverIP := getServerIP()
+
+	for _, protoName := range m.config.Protocols {
+		p, ok := m.registry.Get(protoName)
+		if !ok {
+			continue
+		}
+
+		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
+
+		// 构建 ServerInfo
+		info := &protocol.ServerInfo{
+			Host: serverIP,
+			Port: p.DefaultPort(),
+		}
+
+		// 根据安装模式填充不同字段
+		if mode == "domain" && m.config.TLS.Domain != "" {
+			info.Domain = m.config.TLS.Domain
+			if m.config.CDN.Enabled && m.config.CDN.Address != "" {
+				info.CDNHost = m.config.CDN.Address
+			}
+		}
+		if strings.Contains(protoName, "reality") {
+			info.Reality = &m.config.Reality
+			info.Port = 443
+		}
+
+		fmt.Println()
+		PrintSeparator()
+		PrintInfo(fmt.Sprintf("协议: %s", protoName))
+
+		for _, u := range users {
+			apiUser := u.ToAPIUser()
+			uri := p.GenerateURI(apiUser, info)
+			if uri == "" {
+				continue
+			}
+
+			PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+			PrintInfo("分享链接:")
+			fmt.Printf("  %s\n", uri)
+			fmt.Println()
+			PrintInfo("二维码:")
+			fmt.Println(subscription.GenerateTerminalQR(uri))
+		}
+	}
 }
 
 func (m *InstallMenu) uninstallProtocol() {
