@@ -190,6 +190,11 @@ func (m *InstallMenu) installCombination() {
 		m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
 	}
 
+	// 生成基础出站和 DNS 配置（Xray 转发流量必需）
+	if err := protocol.EnsureBaseConfigs(confDir); err != nil {
+		m.logger.WithError(err).Warn("生成基础配置失败")
+	}
+
 	// 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
@@ -417,6 +422,11 @@ func (m *InstallMenu) installReality() {
 	}
 	if err := protocol.GenerateStatsModuleConfig(m.config.Paths.XrayConf); err != nil {
 		m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+	}
+
+	// 8.5 生成基础出站和 DNS 配置（Xray 转发流量必需）
+	if err := protocol.EnsureBaseConfigs(m.config.Paths.XrayConf); err != nil {
+		m.logger.WithError(err).Warn("生成基础配置失败")
 	}
 
 	// 9. 保存配置
