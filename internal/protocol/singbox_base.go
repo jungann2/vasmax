@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 
 	"vasmax/internal/security"
@@ -30,26 +31,13 @@ func GenerateSingBoxBaseOutbound(confDir string) error {
 }
 
 // GenerateSingBoxBaseDNS 生成 sing-box 基础 DNS 配置（01_dns.json）
+// sing-box 1.12+ 废弃了旧版 DNS 格式，这里不生成 DNS 配置，使用系统默认 DNS
 func GenerateSingBoxBaseDNS(confDir string) error {
-	config := map[string]interface{}{
-		"dns": map[string]interface{}{
-			"servers": []map[string]interface{}{
-				{
-					"tag":     "google",
-					"address": "8.8.8.8",
-				},
-				{
-					"tag":     "cloudflare",
-					"address": "1.1.1.1",
-				},
-			},
-		},
-	}
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return err
-	}
-	return security.AtomicWrite(filepath.Join(confDir, "01_dns.json"), data, 0644)
+	// 不生成 DNS 配置，sing-box 会使用系统默认 DNS
+	// 删除旧版可能存在的 DNS 配置文件
+	dnsPath := filepath.Join(confDir, "01_dns.json")
+	os.Remove(dnsPath)
+	return nil
 }
 
 // GenerateSingBoxBaseRoute 生成 sing-box 基础路由配置（02_route.json）
