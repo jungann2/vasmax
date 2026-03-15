@@ -93,7 +93,11 @@ func (m *ToolsMenu) cdnMenu() {
 		for i, p := range presets {
 			PrintOption(i+1, p)
 		}
+		PrintOptionStr("0", "返回")
 		idx := ReadInput("选择预设")
+		if idx == "" || idx == "0" {
+			return
+		}
 		var n int
 		if _, err := fmt.Sscanf(idx, "%d", &n); err == nil && n >= 1 && n <= len(presets) {
 			m.config.CDN.Enabled = true
@@ -116,7 +120,11 @@ func (m *ToolsMenu) fakeSiteMenu() {
 		for i, url := range nginx.PresetFakeSites {
 			PrintOption(i+1, url)
 		}
+		PrintOptionStr("0", "返回")
 		idx := ReadInput("选择模板")
+		if idx == "" || idx == "0" {
+			return
+		}
 		var n int
 		if _, err := fmt.Sscanf(idx, "%d", &n); err == nil && n >= 1 && n <= len(nginx.PresetFakeSites) {
 			PrintInfo("正在部署...")

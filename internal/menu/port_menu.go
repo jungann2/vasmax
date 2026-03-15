@@ -78,6 +78,7 @@ func (m *PortMenu) openPort() {
 	PrintOption(1, "TCP")
 	PrintOption(2, "UDP")
 	PrintOption(3, "TCP + UDP")
+	PrintOptionStr("0", "返回")
 	protoChoice := ReadChoice("选择协议", []string{"1", "2", "3"})
 	var proto string
 	switch protoChoice {
@@ -131,8 +132,12 @@ func (m *PortMenu) closePort() {
 	for i, p := range ports {
 		PrintOption(i+1, fmt.Sprintf("%d/%s  %s", p.Port, p.Protocol, p.Note))
 	}
+	PrintOptionStr("0", "返回")
 
 	input := ReadInput("请输入要关闭的编号")
+	if input == "" || input == "0" {
+		return
+	}
 	var idx int
 	if _, err := fmt.Sscanf(input, "%d", &idx); err != nil || idx < 1 || idx > len(ports) {
 		PrintError("无效编号")

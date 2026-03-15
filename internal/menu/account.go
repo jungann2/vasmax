@@ -83,8 +83,12 @@ func (m *AccountMenu) removeUser() {
 	for i, u := range users {
 		PrintOption(i+1, fmt.Sprintf("%s (%s)", u.Email, u.UUID))
 	}
+	PrintOptionStr("0", "返回")
 
 	input := ReadInput("请输入要删除的用户编号")
+	if input == "" || input == "0" {
+		return
+	}
 	var idx int
 	if _, err := fmt.Sscanf(input, "%d", &idx); err != nil || idx < 1 || idx > len(users) {
 		PrintError("无效编号")

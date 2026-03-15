@@ -195,6 +195,7 @@ func (m *ProtocolMenus) ShowTuic() {
 			PrintOption(1, "bbr")
 			PrintOption(2, "cubic")
 			PrintOption(3, "new_reno")
+			PrintOptionStr("0", "返回")
 			cc := ReadChoice("选择算法", []string{"1", "2", "3"})
 			switch cc {
 			case "1":
@@ -203,6 +204,8 @@ func (m *ProtocolMenus) ShowTuic() {
 				m.config.Tuic.CongestionControl = "cubic"
 			case "3":
 				m.config.Tuic.CongestionControl = "new_reno"
+			case "0":
+				continue
 			}
 			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
 			PrintSuccess("拥塞控制算法已更新")
