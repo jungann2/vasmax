@@ -100,7 +100,8 @@ func (m *SubscriptionMenu) regenerate() {
 func (m *SubscriptionMenu) setDomain() {
 	PrintTitle("设置订阅域名")
 	PrintInfo(fmt.Sprintf("当前域名: %s", m.config.Subscription.Domain))
-	domain := ReadInput("请输入新的订阅域名（留空取消）")
+	PrintSuccess("  直接回车取消")
+	domain := ReadInput("请输入新的订阅域名")
 	if domain == "" {
 		return
 	}

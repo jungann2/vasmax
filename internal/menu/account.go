@@ -46,12 +46,14 @@ func (m *AccountMenu) addUser() {
 	PrintTitle("添加用户")
 
 	// 生成或自定义 UUID
-	uuid := ReadInput("请输入UUID（留空自动生成）")
+	PrintSuccess("  直接回车自动生成")
+	uuid := ReadInput("请输入UUID")
 	if uuid == "" {
 		uuid = generateUUID()
 	}
 
-	email := ReadInput("请输入邮箱标识（留空使用默认）")
+	PrintSuccess("  直接回车使用默认")
+	email := ReadInput("请输入邮箱标识")
 	if email == "" {
 		short := uuid
 		if len(short) > 8 {

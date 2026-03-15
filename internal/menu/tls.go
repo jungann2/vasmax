@@ -148,7 +148,8 @@ func (m *TLSMenu) issueCert() {
 	case "1":
 		args = []string{"--issue", "-d", domain, "--standalone", "--server", caServer}
 	case "2":
-		webroot := ReadInput("请输入 Nginx webroot 路径（默认 /var/www/html）")
+		PrintSuccess("  直接回车选择默认 /var/www/html")
+		webroot := ReadInput("请输入 Nginx webroot 路径")
 		if webroot == "" {
 			webroot = "/var/www/html"
 		}
@@ -377,7 +378,8 @@ func (m *TLSMenu) detectPanelCert() {
 
 func (m *TLSMenu) installAcme() {
 	PrintInfo("正在安装 acme.sh...")
-	email := ReadInput("请输入邮箱（用于证书到期提醒，直接回车跳过）")
+	PrintSuccess("  直接回车跳过")
+	email := ReadInput("请输入邮箱（用于证书到期提醒）")
 	var installCmd string
 	if email != "" {
 		installCmd = fmt.Sprintf("curl -fsSL https://get.acme.sh | sh -s email=%s", email)

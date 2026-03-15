@@ -142,7 +142,8 @@ func (m *XboardMenu) modifyConfig() {
 	PrintInfo(fmt.Sprintf("当前节点ID: %d", m.config.NodeID))
 	PrintInfo(fmt.Sprintf("当前节点类型: %s", m.config.NodeType))
 
-	apiHost := ReadInput("新 API 地址（留空不修改）")
+	PrintSuccess("  直接回车不修改")
+	apiHost := ReadInput("新 API 地址")
 	if apiHost != "" {
 		if err := security.ValidateURL(apiHost); err != nil {
 			PrintError(fmt.Sprintf("API 地址无效: %v", err))
@@ -151,12 +152,14 @@ func (m *XboardMenu) modifyConfig() {
 		m.config.APIHost = apiHost
 	}
 
-	apiToken := ReadInput("新通信密钥（留空不修改）")
+	PrintSuccess("  直接回车不修改")
+	apiToken := ReadInput("新通信密钥")
 	if apiToken != "" {
 		m.config.APIToken = apiToken
 	}
 
-	nodeIDStr := ReadInput("新节点 ID（留空不修改）")
+	PrintSuccess("  直接回车不修改")
+	nodeIDStr := ReadInput("新节点 ID")
 	if nodeIDStr != "" {
 		var nodeID int
 		if _, err := fmt.Sscanf(nodeIDStr, "%d", &nodeID); err == nil && nodeID > 0 {

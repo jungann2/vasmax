@@ -92,7 +92,8 @@ func (m *PortMenu) openPort() {
 		return
 	}
 
-	note := ReadInput("备注（留空跳过）")
+	PrintSuccess("  直接回车跳过")
+	note := ReadInput("备注")
 
 	// 开放防火墙
 	var fwErr error

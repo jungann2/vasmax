@@ -96,8 +96,9 @@ func (m *ProtocolMenus) hysteria2PortHop() {
 
 func (m *ProtocolMenus) hysteria2Speed() {
 	PrintInfo(fmt.Sprintf("当前下行: %d Mbps  上行: %d Mbps", m.config.Hysteria2.DownMbps, m.config.Hysteria2.UpMbps))
-	downStr := ReadInput("下行速度 (Mbps，留空不修改)")
-	upStr := ReadInput("上行速度 (Mbps，留空不修改)")
+	PrintSuccess("  直接回车不修改")
+	downStr := ReadInput("下行速度 (Mbps)")
+	upStr := ReadInput("上行速度 (Mbps)")
 
 	if downStr != "" {
 		var v int
