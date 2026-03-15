@@ -476,6 +476,7 @@ do_install() {
         systemctl start VasmaX
     fi
     green "安装完成！运行 vasmax 打开管理菜单"
+    ${INSTALL_PATH} --version 2>/dev/null || true
 }
 
 do_update() {
@@ -488,6 +489,7 @@ do_update() {
         systemctl start VasmaX
     fi
     green "更新完成"
+    ${INSTALL_PATH} --version 2>/dev/null || true
 }
 
 # --- 入口 ---
