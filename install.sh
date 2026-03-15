@@ -376,11 +376,23 @@ uninstall() {
     # 检测系统类型（卸载 Nginx 需要）
     detect_os
 
-    # 停止服务
+    # 停止 VasmaX 服务
     systemctl stop VasmaX 2>/dev/null || true
     systemctl disable VasmaX 2>/dev/null || true
 
-    # 删除文件
+    # 停止并清理 Xray-core
+    systemctl stop xray.service 2>/dev/null || true
+    systemctl disable xray.service 2>/dev/null || true
+    rm -f /etc/systemd/system/xray.service
+    rm -rf /usr/local/xray-core/
+
+    # 停止并清理 sing-box
+    systemctl stop sing-box.service 2>/dev/null || true
+    systemctl disable sing-box.service 2>/dev/null || true
+    rm -f /etc/systemd/system/sing-box.service
+    rm -rf /usr/local/sing-box/
+
+    # 删除 VasmaX 文件
     rm -f "${INSTALL_PATH}"
     rm -f "${SERVICE_FILE}"
     rm -f /usr/local/bin/vasmax
@@ -398,7 +410,7 @@ uninstall() {
     uninstall_nginx
 
     systemctl daemon-reload
-    green "VasmaX 已卸载"
+    green "VasmaX 已卸载（含 Xray-core 和 sing-box）"
     yellow "注意: acme.sh 证书配置未被移除"
     yellow "如需清理请手动执行: ~/.acme.sh/acme.sh --uninstall"
 }
