@@ -284,13 +284,19 @@ func (m *InstallMenu) installReality() {
 
 	PrintInfo("将自动生成 X25519 密钥对、ShortID 和默认用户")
 
-	// 0. 询问是否使用阿里云主机（443 端口被拦截，需要用非标准端口）
+	// 0. 设置 Reality 监听端口
+	portInput := ReadInput("请输入 Reality 监听端口（直接回车默认 443，阿里云建议 8443）")
 	realityPort := 443
-	if Confirm("是否使用阿里云主机？（阿里云 443 端口有限制，将自动使用 8443 端口）") {
-		realityPort = 8443
-		PrintInfo("已设置 Reality 端口为 8443（阿里云兼容模式）")
+	if portInput != "" {
+		var p int
+		if _, err := fmt.Sscanf(portInput, "%d", &p); err != nil || p < 1 || p > 65535 {
+			PrintError("端口无效，使用默认 443")
+		} else {
+			realityPort = p
+		}
 	}
 	m.config.Reality.Port = realityPort
+	PrintInfo(fmt.Sprintf("Reality 端口: %d", realityPort))
 
 	// 1. 安装 Xray-core
 	ctx := context.Background()
