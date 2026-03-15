@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 
 	"vasmax/internal/api"
@@ -54,10 +55,15 @@ func (a *AnyTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
 func (a *AnyTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 	params := url.Values{}
 	params.Set("peer", info.Domain)
-	params.Set("insecure", "0")
-	params.Set("sni", info.Domain)
+	// 自签证书（无域名模式，Domain 是 IP）需要 insecure=1
+	if net.ParseIP(info.Domain) != nil {
+		params.Set("insecure", "1")
+	} else {
+		params.Set("insecure", "0")
+		params.Set("sni", info.Domain)
+	}
 	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-anytls", info.Domain)))
+		url.PathEscape(fmt.Sprintf("%s-anytls", info.Host)))
 }
 
 func (a *AnyTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {

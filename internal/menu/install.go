@@ -181,18 +181,37 @@ func (m *InstallMenu) installCombination() {
 		PrintSuccess(fmt.Sprintf("%s 安装完成", p.Name()))
 	}
 
-	// 生成 Stats API 配置（监控功能需要）
-	confDir := m.config.Paths.XrayConf
-	if err := protocol.GenerateStatsAPIConfig(confDir); err != nil {
-		m.logger.WithError(err).Warn("生成 Stats API 配置失败")
-	}
-	if err := protocol.GenerateStatsModuleConfig(confDir); err != nil {
-		m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+	// 检测选择了哪些核心类型
+	hasXrayProto := false
+	hasSingBoxProto := false
+	for _, p := range selected {
+		switch p.CoreType() {
+		case "xray":
+			hasXrayProto = true
+		case "singbox":
+			hasSingBoxProto = true
+		}
 	}
 
-	// 生成基础出站和 DNS 配置（Xray 转发流量必需）
-	if err := protocol.EnsureBaseConfigs(confDir); err != nil {
-		m.logger.WithError(err).Warn("生成基础配置失败")
+	// 生成 Xray 基础配置
+	if hasXrayProto {
+		confDir := m.config.Paths.XrayConf
+		if err := protocol.GenerateStatsAPIConfig(confDir); err != nil {
+			m.logger.WithError(err).Warn("生成 Stats API 配置失败")
+		}
+		if err := protocol.GenerateStatsModuleConfig(confDir); err != nil {
+			m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+		}
+		if err := protocol.EnsureBaseConfigs(confDir); err != nil {
+			m.logger.WithError(err).Warn("生成 Xray 基础配置失败")
+		}
+	}
+
+	// 生成 sing-box 基础配置
+	if hasSingBoxProto {
+		if err := protocol.EnsureSingBoxBaseConfigs(m.config.Paths.SingBoxConf); err != nil {
+			m.logger.WithError(err).Warn("生成 sing-box 基础配置失败")
+		}
 	}
 
 	// 保存配置
@@ -379,8 +398,46 @@ func (m *InstallMenu) installReality() {
 		users = m.userMgr.GetAllUsers()
 	}
 
-	// 7. 生成 Xray inbound 配置文件
-	PrintInfo("正在生成 Xray 配置...")
+	// 6.5 安装 sing-box core（如果选择了 sing-box 协议）
+	hasSingBoxProto := false
+	hasXrayProto := false
+	for _, p := range selected {
+		switch p.CoreType() {
+		case "singbox":
+			hasSingBoxProto = true
+		case "xray":
+			hasXrayProto = true
+		}
+	}
+	if hasSingBoxProto {
+		sbStatus := m.coreMgr.GetStatus()
+		if cs, ok := sbStatus["singbox"]; !ok || !cs.Installed {
+			PrintInfo("正在安装 sing-box...")
+			if err := m.coreMgr.InstallCore(ctx, "singbox"); err != nil {
+				PrintError(fmt.Sprintf("安装 sing-box 失败: %v", err))
+				return
+			}
+			PrintSuccess("sing-box 安装完成")
+		} else {
+			PrintInfo("sing-box 已安装，跳过")
+		}
+	}
+
+	// 6.6 为 sing-box TLS 协议生成自签证书（无域名模式）
+	var selfCertFile, selfKeyFile string
+	if hasSingBoxProto {
+		certPaths, err := security.EnsureSelfSignedCert("/etc/vasmax/tls")
+		if err != nil {
+			PrintError(fmt.Sprintf("生成自签证书失败: %v", err))
+			return
+		}
+		selfCertFile = certPaths.CertFile
+		selfKeyFile = certPaths.KeyFile
+		PrintSuccess("自签 TLS 证书已就绪")
+	}
+
+	// 7. 生成 inbound 配置文件（区分 Xray 和 sing-box）
+	PrintInfo("正在生成配置...")
 	apiUsers := make([]*api.User, 0, len(users))
 	for _, u := range users {
 		apiUsers = append(apiUsers, u.ToAPIUser())
@@ -399,6 +456,12 @@ func (m *InstallMenu) installReality() {
 			params.Port = p.DefaultPort()
 		}
 
+		// sing-box TLS 协议使用自签证书
+		if p.CoreType() == "singbox" && p.Name() != "socks5" {
+			params.CertFile = selfCertFile
+			params.KeyFile = selfKeyFile
+		}
+
 		inboundJSON, err := p.GenerateInbound(params)
 		if err != nil {
 			PrintError(fmt.Sprintf("生成 %s 入站配置失败: %v", p.Name(), err))
@@ -408,7 +471,16 @@ func (m *InstallMenu) installReality() {
 		wrapper := map[string]interface{}{
 			"inbounds": []json.RawMessage{inboundJSON},
 		}
-		confPath := filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", p.Name()))
+
+		// 根据核心类型写入对应目录
+		var confPath string
+		switch p.CoreType() {
+		case "singbox":
+			confPath = filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("10_%s_inbounds.json", p.Name()))
+		default:
+			confPath = filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", p.Name()))
+		}
+
 		if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
 			PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
 			continue
@@ -416,17 +488,25 @@ func (m *InstallMenu) installReality() {
 		PrintSuccess(fmt.Sprintf("%s 配置已生成", p.Name()))
 	}
 
-	// 8. 生成 Stats API 配置（监控功能需要）
-	if err := protocol.GenerateStatsAPIConfig(m.config.Paths.XrayConf); err != nil {
-		m.logger.WithError(err).Warn("生成 Stats API 配置失败")
-	}
-	if err := protocol.GenerateStatsModuleConfig(m.config.Paths.XrayConf); err != nil {
-		m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+	// 8. 生成 Xray Stats API 配置（监控功能需要）
+	if hasXrayProto {
+		if err := protocol.GenerateStatsAPIConfig(m.config.Paths.XrayConf); err != nil {
+			m.logger.WithError(err).Warn("生成 Stats API 配置失败")
+		}
+		if err := protocol.GenerateStatsModuleConfig(m.config.Paths.XrayConf); err != nil {
+			m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+		}
+		// 生成基础出站和 DNS 配置（Xray 转发流量必需）
+		if err := protocol.EnsureBaseConfigs(m.config.Paths.XrayConf); err != nil {
+			m.logger.WithError(err).Warn("生成 Xray 基础配置失败")
+		}
 	}
 
-	// 8.5 生成基础出站和 DNS 配置（Xray 转发流量必需）
-	if err := protocol.EnsureBaseConfigs(m.config.Paths.XrayConf); err != nil {
-		m.logger.WithError(err).Warn("生成基础配置失败")
+	// 8.5 生成 sing-box 基础配置（outbound + dns + route）
+	if hasSingBoxProto {
+		if err := protocol.EnsureSingBoxBaseConfigs(m.config.Paths.SingBoxConf); err != nil {
+			m.logger.WithError(err).Warn("生成 sing-box 基础配置失败")
+		}
 	}
 
 	// 9. 保存配置
@@ -435,17 +515,35 @@ func (m *InstallMenu) installReality() {
 		return
 	}
 
-	// 10. 启动 Xray
-	PrintInfo("正在启动 Xray...")
-	if err := m.coreMgr.RestartXray(); err != nil {
-		PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
-	} else {
-		time.Sleep(2 * time.Second)
-		newStatus := m.coreMgr.GetStatus()
-		if xs, ok := newStatus["xray"]; ok && xs.Running {
-			PrintSuccess("Xray 运行正常")
+	// 10. 启动核心
+	if hasXrayProto {
+		PrintInfo("正在启动 Xray...")
+		if err := m.coreMgr.RestartXray(); err != nil {
+			PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
 		} else {
-			PrintWarning("Xray 未运行，请检查日志")
+			time.Sleep(2 * time.Second)
+			newStatus := m.coreMgr.GetStatus()
+			if xs, ok := newStatus["xray"]; ok && xs.Running {
+				PrintSuccess("Xray 运行正常")
+			} else {
+				PrintWarning("Xray 未运行，请检查日志")
+			}
+		}
+	}
+	if hasSingBoxProto {
+		PrintInfo("正在合并 sing-box 配置并启动...")
+		if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
+			PrintError(fmt.Sprintf("sing-box 配置合并失败: %v", err))
+		} else if err := m.coreMgr.RestartSingBox(); err != nil {
+			PrintWarning(fmt.Sprintf("启动 sing-box 失败: %v（可能需要手动启动）", err))
+		} else {
+			time.Sleep(2 * time.Second)
+			newStatus := m.coreMgr.GetStatus()
+			if ss, ok := newStatus["singbox"]; ok && ss.Running {
+				PrintSuccess("sing-box 运行正常")
+			} else {
+				PrintWarning("sing-box 未运行，请检查日志")
+			}
 		}
 	}
 
@@ -474,30 +572,49 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 	PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
 	fmt.Println()
 
-	p, ok := m.registry.Get("vless_reality_vision")
-	if !ok {
-		return
-	}
+	// 显示所有已安装协议的分享链接
+	for _, protoName := range m.config.Protocols {
+		p, ok := m.registry.Get(protoName)
+		if !ok {
+			continue
+		}
 
-	serverInfo := &protocol.ServerInfo{
-		Host:    serverIP,
-		Port:    m.config.Reality.EffectivePort(),
-		Reality: &m.config.Reality,
-	}
+		info := &protocol.ServerInfo{
+			Host: serverIP,
+			Port: p.DefaultPort(),
+		}
 
-	for _, u := range users {
-		apiUser := u.ToAPIUser()
-		uri := p.GenerateURI(apiUser, serverInfo)
+		// Reality 协议使用 Reality 配置
+		if strings.Contains(protoName, "reality") {
+			info.Reality = &m.config.Reality
+			info.Port = m.config.Reality.EffectivePort()
+		}
+
+		// 无域名模式下 sing-box 协议用 IP 作为 Domain
+		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
+		if mode == "nodomain" && p.CoreType() == "singbox" {
+			info.Domain = serverIP
+		}
 
 		PrintSeparator()
-		PrintInfo(fmt.Sprintf("用户: %s", u.Email))
-		PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
-		fmt.Println()
-		PrintInfo("分享链接:")
-		fmt.Printf("  %s\n", uri)
-		fmt.Println()
-		PrintInfo("二维码:")
-		fmt.Println(subscription.GenerateTerminalQR(uri))
+		PrintInfo(fmt.Sprintf("协议: %s", protoName))
+
+		for _, u := range users {
+			apiUser := u.ToAPIUser()
+			uri := p.GenerateURI(apiUser, info)
+			if uri == "" {
+				continue
+			}
+
+			PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+			PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
+			fmt.Println()
+			PrintInfo("分享链接:")
+			fmt.Printf("  %s\n", uri)
+			fmt.Println()
+			PrintInfo("二维码:")
+			fmt.Println(subscription.GenerateTerminalQR(uri))
+		}
 	}
 }
 
@@ -664,6 +781,10 @@ func (m *InstallMenu) showInstalled() {
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
 			info.Port = m.config.Reality.EffectivePort()
+		}
+		// 无域名模式下 sing-box 协议用 IP 作为 Domain
+		if mode == "nodomain" && p.CoreType() == "singbox" {
+			info.Domain = serverIP
 		}
 
 		fmt.Println()

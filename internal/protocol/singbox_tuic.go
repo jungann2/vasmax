@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 
 	"vasmax/internal/api"
@@ -62,8 +63,12 @@ func (t *Tuic) GenerateURI(user *api.User, info *ServerInfo) string {
 	params.Set("congestion_control", "bbr")
 	params.Set("alpn", "h3")
 	params.Set("udp_relay_mode", "native")
+	// 自签证书（无域名模式，Domain 是 IP）需要 insecure=1
+	if net.ParseIP(info.Domain) != nil {
+		params.Set("insecure", "1")
+	}
 	return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", user.UUID, user.UUID, info.Host, info.Port,
-		params.Encode(), url.PathEscape(fmt.Sprintf("%s-tuic", info.Domain)))
+		params.Encode(), url.PathEscape(fmt.Sprintf("%s-tuic", info.Host)))
 }
 
 func (t *Tuic) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {

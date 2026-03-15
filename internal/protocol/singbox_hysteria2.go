@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 
 	"vasmax/internal/api"
@@ -55,9 +56,14 @@ func (h *Hysteria2) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
 func (h *Hysteria2) GenerateURI(user *api.User, info *ServerInfo) string {
 	params := url.Values{}
 	params.Set("sni", info.Domain)
-	params.Set("insecure", "0")
+	// 自签证书（无域名模式，Domain 是 IP）需要 insecure=1
+	if net.ParseIP(info.Domain) != nil {
+		params.Set("insecure", "1")
+	} else {
+		params.Set("insecure", "0")
+	}
 	return fmt.Sprintf("hysteria2://%s@%s:%d?%s#%s", user.UUID, info.Host, info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-hysteria2", info.Domain)))
+		url.PathEscape(fmt.Sprintf("%s-hysteria2", info.Host)))
 }
 
 func (h *Hysteria2) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
