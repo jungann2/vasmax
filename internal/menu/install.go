@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -565,30 +566,149 @@ func (m *InstallMenu) uninstallProtocol() {
 		return
 	}
 	for i, p := range m.config.Protocols {
-		PrintOption(i+1, p)
+		mode := inferProtocolMode(m.config.ProtocolModes, p)
+		modeStr := ""
+		switch mode {
+		case "domain":
+			modeStr = Green(" (绑定域名)")
+		case "nodomain":
+			modeStr = Cyan(" (无域名)")
+		}
+		PrintOption(i+1, p+modeStr)
 	}
 
-	input := ReadInput("请输入要卸载的协议编号")
-	var idx int
-	if _, err := fmt.Sscanf(input, "%d", &idx); err != nil || idx < 1 || idx > len(m.config.Protocols) {
-		PrintError("无效编号")
+	input := ReadInput("请输入要卸载的协议编号（空格/逗号分隔，如 1,3,5）")
+	if input == "" || input == "0" {
 		return
 	}
 
-	name := m.config.Protocols[idx-1]
-	if !Confirm(fmt.Sprintf("确认卸载 %s?", name)) {
+	// 解析选择（支持多选）
+	parts := strings.FieldsFunc(input, func(r rune) bool { return r == ',' || r == ' ' })
+	var indices []int
+	for _, p := range parts {
+		var idx int
+		if _, err := fmt.Sscanf(p, "%d", &idx); err != nil || idx < 1 || idx > len(m.config.Protocols) {
+			PrintError(fmt.Sprintf("无效编号: %s", p))
+			return
+		}
+		indices = append(indices, idx-1)
+	}
+
+	// 显示待卸载列表
+	var names []string
+	for _, i := range indices {
+		names = append(names, m.config.Protocols[i])
+	}
+	if !Confirm(fmt.Sprintf("确认卸载 %s?", strings.Join(names, ", "))) {
 		return
 	}
 
-	// 移除协议
-	m.config.Protocols = append(m.config.Protocols[:idx-1], m.config.Protocols[idx:]...)
-	delete(m.config.ProtocolModes, name)
+	// 收集需要重启的核心
+	needRestartXray := false
+	needRestartSingBox := false
+
+	for _, name := range names {
+		// 1. 删除 Xray 入站配置文件
+		xrayConfFile := filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", name))
+		if err := os.Remove(xrayConfFile); err != nil && !os.IsNotExist(err) {
+			m.logger.WithError(err).Warnf("删除 Xray 配置文件失败: %s", xrayConfFile)
+		} else if err == nil {
+			PrintInfo(fmt.Sprintf("已删除 Xray 配置: %s", xrayConfFile))
+			needRestartXray = true
+		}
+
+		// 2. 删除 sing-box 入站配置文件
+		singboxConfFile := filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("%s.json", name))
+		if err := os.Remove(singboxConfFile); err != nil && !os.IsNotExist(err) {
+			m.logger.WithError(err).Warnf("删除 sing-box 配置文件失败: %s", singboxConfFile)
+		} else if err == nil {
+			PrintInfo(fmt.Sprintf("已删除 sing-box 配置: %s", singboxConfFile))
+			needRestartSingBox = true
+		}
+
+		// 3. 删除 Nginx 反代 location（如果是需要 Nginx 的协议）
+		if p, ok := m.registry.Get(name); ok {
+			if needsNginxProxy(p) && m.config.TLS.Domain != "" {
+				if err := m.nginxMgr.RemoveLocation(m.config.TLS.Domain, name); err != nil {
+					m.logger.WithError(err).Warnf("删除 Nginx location 失败: %s", name)
+				} else {
+					PrintInfo(fmt.Sprintf("已删除 Nginx 反代配置: %s", name))
+				}
+			}
+			// 标记对应核心需要重启
+			if p.CoreType() == "xray" {
+				needRestartXray = true
+			} else if p.CoreType() == "singbox" {
+				needRestartSingBox = true
+			}
+		}
+
+		// 4. 从配置中移除
+		for i, ip := range m.config.Protocols {
+			if ip == name {
+				m.config.Protocols = append(m.config.Protocols[:i], m.config.Protocols[i+1:]...)
+				break
+			}
+		}
+		delete(m.config.ProtocolModes, name)
+
+		PrintSuccess(fmt.Sprintf("%s 已卸载", name))
+	}
+
+	// 5. 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}
 
-	PrintSuccess(fmt.Sprintf("%s 已卸载", name))
+	// 6. 检查是否还有协议使用对应核心，没有则停止核心
+	hasXray := false
+	hasSingBox := false
+	for _, p := range m.config.Protocols {
+		if proto, ok := m.registry.Get(p); ok {
+			switch proto.CoreType() {
+			case "xray":
+				hasXray = true
+			case "singbox":
+				hasSingBox = true
+			}
+		}
+	}
+
+	// 7. 重启或停止核心服务
+	if needRestartXray {
+		if hasXray {
+			PrintInfo("正在重启 Xray...")
+			if err := m.coreMgr.RestartXray(); err != nil {
+				PrintWarning(fmt.Sprintf("重启 Xray 失败: %v", err))
+			} else {
+				PrintSuccess("Xray 已重启")
+			}
+		} else {
+			PrintInfo("已无 Xray 协议，正在停止 Xray...")
+			m.coreMgr.StopAll() // StopAll 会安全跳过未安装的
+			PrintSuccess("Xray 已停止")
+		}
+	}
+	if needRestartSingBox {
+		if hasSingBox {
+			PrintInfo("正在重启 sing-box...")
+			if err := m.coreMgr.RestartSingBox(); err != nil {
+				PrintWarning(fmt.Sprintf("重启 sing-box 失败: %v", err))
+			} else {
+				PrintSuccess("sing-box 已重启")
+			}
+		} else {
+			PrintInfo("已无 sing-box 协议，正在停止 sing-box...")
+			m.coreMgr.StopAll()
+			PrintSuccess("sing-box 已停止")
+		}
+	}
+
+	// 8. 重载 Nginx（如果有改动）
+	if m.config.TLS.Domain != "" {
+		_ = m.nginxMgr.Reload()
+	}
 }
 
 // inferProtocolMode 推断协议安装模式，兼容旧版本未记录模式的情况
