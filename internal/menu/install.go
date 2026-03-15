@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -455,7 +457,30 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 
 // getServerIP 获取服务器公网 IP
 func getServerIP() string {
-	// 尝试通过出站连接获取本机 IP
+	// 优先通过外部 API 获取公网 IP（阿里云等 NAT 环境下本地 IP 是内网地址）
+	apis := []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://icanhazip.com",
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, api := range apis {
+		resp, err := client.Get(api)
+		if err != nil {
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		ip := strings.TrimSpace(string(body))
+		if net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+
+	// 回退：通过出站连接获取本机 IP（可能是内网 IP）
 	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 3*time.Second)
 	if err == nil {
 		defer conn.Close()
