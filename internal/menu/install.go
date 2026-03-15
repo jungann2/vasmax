@@ -1290,7 +1290,24 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 	caServer := "letsencrypt"
 	for {
 		fmt.Println()
-		PrintOption(1, "standalone（需要 80 端口空闲，申请和续期时临时占用几秒）")
+
+		// 预检 80 端口状态
+		port80Free := true
+		if ln, err := net.Listen("tcp", ":80"); err != nil {
+			port80Free = false
+			PrintWarning("⚠ 检测到 80 端口已被占用（可能是 Nginx），standalone 方式不可用")
+			fmt.Println()
+		} else {
+			ln.Close()
+			PrintSuccess("✓ 80 端口空闲，standalone 方式可用")
+			fmt.Println()
+		}
+
+		if port80Free {
+			PrintOption(1, "standalone（需要 80 端口空闲，申请和续期时临时占用几秒）")
+		} else {
+			PrintOption(1, "standalone（80 端口被占用，不推荐）")
+		}
 		PrintOption(2, "Nginx webroot（80 端口已被 Nginx 占用时使用，续期无需停 Nginx）")
 		PrintOption(3, "Cloudflare DNS API（无需开放 80 端口，域名 DNS 需托管在 Cloudflare）")
 		PrintOption(4, "阿里云 DNS API（无需开放 80 端口，域名 DNS 需托管在阿里云）")
@@ -1301,15 +1318,11 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 		var args []string
 		switch mode {
 		case "1":
-			// 检测 80 端口是否被占用
-			if ln, err := net.Listen("tcp", ":80"); err != nil {
-				PrintWarning("80 端口已被占用（可能是 Nginx），standalone 方式需要 80 端口空闲")
-				PrintInfo("建议选择 Nginx webroot（选项 2）或 DNS API 验证方式")
-				if !Confirm("仍然尝试 standalone?") {
+			if !port80Free {
+				PrintWarning("80 端口被占用，standalone 大概率会失败")
+				if !Confirm("仍然尝试?") {
 					continue
 				}
-			} else {
-				ln.Close()
 			}
 			args = []string{"--issue", "-d", domain, "--standalone", "--server", caServer}
 		case "2":
