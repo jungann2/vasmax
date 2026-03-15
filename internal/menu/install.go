@@ -48,9 +48,10 @@ func (m *InstallMenu) Show() {
 		PrintOption(2, "一键 Reality 安装（无域名）")
 		PrintOption(3, "查看已安装协议")
 		PrintOption(4, "卸载协议")
+		PrintOption(5, "Reality 管理")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5"})
 		switch choice {
 		case "1":
 			m.installCombination()
@@ -60,6 +61,8 @@ func (m *InstallMenu) Show() {
 			m.showInstalled()
 		case "4":
 			m.uninstallProtocol()
+		case "5":
+			m.showRealityMenu()
 		case "0":
 			return
 		}
@@ -387,6 +390,80 @@ func getServerIP() string {
 		}
 	}
 	return "YOUR_SERVER_IP"
+}
+
+// showRealityMenu 显示 Reality 管理菜单
+func (m *InstallMenu) showRealityMenu() {
+	if m.config.Reality.PrivateKey == "" {
+		PrintWarning("尚未安装 Reality 协议，请先使用一键 Reality 安装")
+		return
+	}
+	for {
+		PrintTitle("Reality 管理")
+		PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
+		PrintInfo(fmt.Sprintf("Dest: %s", m.config.Reality.Dest))
+		PrintSeparator()
+		PrintOption(1, "修改伪装域名")
+		PrintOption(2, "查看密钥和连接信息")
+		PrintOption(3, "重新生成密钥对")
+		PrintOptionStr("0", "返回")
+
+		choice := ReadChoice("请选择", []string{"1", "2", "3"})
+		switch choice {
+		case "1":
+			dest := ReadInput("请输入新的伪装域名 (如 www.apple.com)")
+			if dest != "" {
+				if !strings.Contains(dest, ":") {
+					dest = dest + ":443"
+				}
+				serverName := strings.Split(dest, ":")[0]
+				m.config.Reality.Dest = dest
+				m.config.Reality.ServerName = serverName
+				if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+					PrintError(fmt.Sprintf("保存失败: %v", err))
+				} else {
+					PrintSuccess(fmt.Sprintf("伪装域名已更新: %s", serverName))
+					PrintWarning("修改后需要重启 Xray 才能生效")
+				}
+			}
+		case "2":
+			PrintInfo(fmt.Sprintf("PublicKey:   %s", m.config.Reality.PublicKey))
+			PrintInfo(fmt.Sprintf("ShortID:     %s", m.config.Reality.ShortID))
+			PrintInfo(fmt.Sprintf("ServerName:  %s", m.config.Reality.ServerName))
+			PrintInfo(fmt.Sprintf("Dest:        %s", m.config.Reality.Dest))
+			fmt.Println()
+			// 显示分享链接
+			users := m.userMgr.GetAllUsers()
+			if len(users) > 0 {
+				m.showRealityInfo(users)
+			}
+		case "3":
+			if !Confirm("重新生成密钥对将导致所有客户端需要更新配置，确认?") {
+				continue
+			}
+			keyPair, err := security.GenerateX25519KeyPair()
+			if err != nil {
+				PrintError(fmt.Sprintf("生成密钥对失败: %v", err))
+				continue
+			}
+			shortID, err := security.GenerateShortID()
+			if err != nil {
+				PrintError(fmt.Sprintf("生成 ShortID 失败: %v", err))
+				continue
+			}
+			m.config.Reality.PrivateKey = keyPair.PrivateKey
+			m.config.Reality.PublicKey = keyPair.PublicKey
+			m.config.Reality.ShortID = shortID
+			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				PrintError(fmt.Sprintf("保存失败: %v", err))
+			} else {
+				PrintSuccess("密钥对和 ShortID 已重新生成")
+				PrintWarning("修改后需要重启 Xray 才能生效")
+			}
+		case "0":
+			return
+		}
+	}
 }
 
 func (m *InstallMenu) showInstalled() {

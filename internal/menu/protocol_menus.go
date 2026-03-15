@@ -2,11 +2,13 @@ package menu
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
 	"vasmax/internal/config"
 	"vasmax/internal/firewall"
+	"vasmax/internal/security"
 )
 
 // ProtocolMenus handles protocol-specific management menus.
@@ -122,24 +124,55 @@ func (m *ProtocolMenus) ShowReality() {
 	for {
 		PrintTitle("Reality 管理")
 		PrintInfo(fmt.Sprintf("Dest: %s", m.config.Reality.Dest))
+		PrintInfo(fmt.Sprintf("ServerName: %s", m.config.Reality.ServerName))
 		PrintSeparator()
-		PrintOption(1, "修改 dest 域名")
+		PrintOption(1, "修改伪装域名")
 		PrintOption(2, "查看密钥信息")
+		PrintOption(3, "重新生成密钥对")
 		PrintOptionStr("0", "返回")
 
-		choice := ReadChoice("请选择", []string{"1", "2"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3"})
 		switch choice {
 		case "1":
-			dest := ReadInput("请输入新的 dest 域名 (如 www.microsoft.com:443)")
+			dest := ReadInput("请输入新的伪装域名 (如 www.apple.com)")
 			if dest != "" {
+				if !strings.Contains(dest, ":") {
+					dest = dest + ":443"
+				}
+				// 提取域名部分作为 ServerName
+				serverName := strings.Split(dest, ":")[0]
 				m.config.Reality.Dest = dest
+				m.config.Reality.ServerName = serverName
 				_ = config.SaveConfig(config.DefaultConfigPath, m.config)
-				PrintSuccess("dest 域名已更新")
+				PrintSuccess(fmt.Sprintf("伪装域名已更新: %s (ServerName: %s)", dest, serverName))
 			}
 		case "2":
-			PrintInfo(fmt.Sprintf("PublicKey: %s", m.config.Reality.PublicKey))
-			PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
-			PrintInfo(fmt.Sprintf("ServerName: %s", m.config.Reality.ServerName))
+			PrintInfo(fmt.Sprintf("PublicKey:   %s", m.config.Reality.PublicKey))
+			PrintInfo(fmt.Sprintf("PrivateKey:  %s", m.config.Reality.PrivateKey))
+			PrintInfo(fmt.Sprintf("ShortID:     %s", m.config.Reality.ShortID))
+			PrintInfo(fmt.Sprintf("ServerName:  %s", m.config.Reality.ServerName))
+			PrintInfo(fmt.Sprintf("Dest:        %s", m.config.Reality.Dest))
+		case "3":
+			if !Confirm("重新生成密钥对将导致所有客户端需要更新配置，确认?") {
+				continue
+			}
+			keyPair, err := security.GenerateX25519KeyPair()
+			if err != nil {
+				PrintError(fmt.Sprintf("生成密钥对失败: %v", err))
+				continue
+			}
+			shortID, err := security.GenerateShortID()
+			if err != nil {
+				PrintError(fmt.Sprintf("生成 ShortID 失败: %v", err))
+				continue
+			}
+			m.config.Reality.PrivateKey = keyPair.PrivateKey
+			m.config.Reality.PublicKey = keyPair.PublicKey
+			m.config.Reality.ShortID = shortID
+			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
+			PrintSuccess("密钥对和 ShortID 已重新生成")
+			PrintInfo(fmt.Sprintf("新 PublicKey: %s", keyPair.PublicKey))
+			PrintInfo(fmt.Sprintf("新 ShortID:  %s", shortID))
 		case "0":
 			return
 		}
