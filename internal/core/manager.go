@@ -1,10 +1,15 @@
 package core
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 
 	"github.com/sirupsen/logrus"
@@ -230,14 +235,21 @@ func (m *Manager) GetStatus() map[string]CoreStatus {
 }
 
 func (m *Manager) installXray(ctx context.Context) error {
-	// 下载 Xray-core 二进制
+	// 下载 Xray-core zip 包到临时文件
+	zipPath := m.xray.BinaryPath + ".zip"
 	tasks := []downloader.DownloadTask{
-		{URL: m.xray.DownloadURL(), DestPath: m.xray.BinaryPath, Name: "xray-core"},
+		{URL: m.xray.DownloadURL(), DestPath: zipPath, Name: "xray-core"},
 	}
 	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
 		m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
 	}); err != nil {
 		return err
+	}
+	defer os.Remove(zipPath)
+
+	// 解压 zip 包，提取 xray 二进制
+	if err := extractFromZip(zipPath, "xray", m.xray.BinaryPath); err != nil {
+		return fmt.Errorf("解压 Xray 失败: %w", err)
 	}
 
 	// 设置可执行权限
@@ -287,13 +299,21 @@ WantedBy=multi-user.target
 }
 
 func (m *Manager) installSingBox(ctx context.Context) error {
+	// 下载 sing-box tar.gz 包到临时文件
+	tgzPath := m.singbox.BinaryPath + ".tar.gz"
 	tasks := []downloader.DownloadTask{
-		{URL: m.singbox.DownloadURL(), DestPath: m.singbox.BinaryPath, Name: "sing-box"},
+		{URL: m.singbox.DownloadURL(), DestPath: tgzPath, Name: "sing-box"},
 	}
 	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
 		m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
 	}); err != nil {
 		return err
+	}
+	defer os.Remove(tgzPath)
+
+	// 解压 tar.gz 包，提取 sing-box 二进制
+	if err := extractFromTarGz(tgzPath, "sing-box", m.singbox.BinaryPath); err != nil {
+		return fmt.Errorf("解压 sing-box 失败: %w", err)
 	}
 
 	// 设置可执行权限
@@ -377,4 +397,86 @@ func restoreFile(path string) error {
 		return fmt.Errorf("备份文件不存在: %s", bakPath)
 	}
 	return os.Rename(bakPath, path)
+}
+
+// extractFromZip 从 zip 包中提取指定文件名的文件
+func extractFromZip(zipPath, targetName, destPath string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("打开 zip 失败: %w", err)
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		// 匹配文件名（可能在子目录中）
+		name := filepath.Base(f.Name)
+		if name != targetName {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("读取 zip 条目失败: %w", err)
+		}
+		defer rc.Close()
+
+		os.MkdirAll(filepath.Dir(destPath), 0755)
+		out, err := os.Create(destPath)
+		if err != nil {
+			return fmt.Errorf("创建目标文件失败: %w", err)
+		}
+		defer out.Close()
+
+		if _, err := io.Copy(out, rc); err != nil {
+			return fmt.Errorf("写入目标文件失败: %w", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("zip 包中未找到 %s", targetName)
+}
+
+// extractFromTarGz 从 tar.gz 包中提取指定文件名的文件
+func extractFromTarGz(tgzPath, targetName, destPath string) error {
+	f, err := os.Open(tgzPath)
+	if err != nil {
+		return fmt.Errorf("打开 tar.gz 失败: %w", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("解压 gzip 失败: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("读取 tar 条目失败: %w", err)
+		}
+
+		name := filepath.Base(hdr.Name)
+		if name != targetName || hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		os.MkdirAll(filepath.Dir(destPath), 0755)
+		out, err := os.Create(destPath)
+		if err != nil {
+			return fmt.Errorf("创建目标文件失败: %w", err)
+		}
+		defer out.Close()
+
+		if _, err := io.Copy(out, tr); err != nil {
+			return fmt.Errorf("写入目标文件失败: %w", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("tar.gz 包中未找到 %s", targetName)
 }

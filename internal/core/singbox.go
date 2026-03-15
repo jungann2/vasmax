@@ -3,11 +3,13 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"vasmax/internal/security"
 )
 
@@ -152,7 +154,36 @@ func mergeRouteObjects(a, b json.RawMessage) (json.RawMessage, error) {
 }
 
 // DownloadURL 获取下载地址
+// sing-box 的 release 文件名包含版本号，需要先获取最新版本
 func (s *SingBox) DownloadURL() string {
 	arch := runtime.GOARCH
+	version := s.latestVersion()
+	if version != "" {
+		return fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/%s/sing-box-%s-linux-%s.tar.gz", version, strings.TrimPrefix(version, "v"), arch)
+	}
 	return fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-%s.tar.gz", arch)
+}
+
+// latestVersion 通过 GitHub API 获取 sing-box 最新 release 版本号
+func (s *SingBox) latestVersion() string {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // 不跟随重定向
+		},
+	}
+	resp, err := client.Get("https://github.com/SagerNet/sing-box/releases/latest")
+	if err != nil {
+		return ""
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return ""
+	}
+	parts := strings.Split(loc, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return ""
 }
