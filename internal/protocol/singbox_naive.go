@@ -13,7 +13,7 @@ type Naive struct{}
 
 func (n *Naive) Name() string          { return "naive" }
 func (n *Naive) CoreType() string      { return "singbox" }
-func (n *Naive) DefaultPort() int      { return 443 }
+func (n *Naive) DefaultPort() int      { return 31304 }
 func (n *Naive) TransportType() string { return "tcp" }
 func (n *Naive) IsCDNCompatible() bool { return false }
 

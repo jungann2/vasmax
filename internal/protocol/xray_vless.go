@@ -15,7 +15,7 @@ type VlessTCPTLSVision struct{}
 
 func (v *VlessTCPTLSVision) Name() string          { return "vless_tcp_tls_vision" }
 func (v *VlessTCPTLSVision) CoreType() string      { return "xray" }
-func (v *VlessTCPTLSVision) DefaultPort() int      { return 443 }
+func (v *VlessTCPTLSVision) DefaultPort() int      { return 31296 }
 func (v *VlessTCPTLSVision) TransportType() string { return "tcp" }
 func (v *VlessTCPTLSVision) IsCDNCompatible() bool { return false }
 
@@ -109,20 +109,12 @@ type VlessWSTLS struct{}
 
 func (v *VlessWSTLS) Name() string          { return "vless_ws_tls" }
 func (v *VlessWSTLS) CoreType() string      { return "xray" }
-func (v *VlessWSTLS) DefaultPort() int      { return 443 }
+func (v *VlessWSTLS) DefaultPort() int      { return 31297 }
 func (v *VlessWSTLS) TransportType() string { return "ws" }
 func (v *VlessWSTLS) IsCDNCompatible() bool { return true }
 
 func (v *VlessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
-	tlsSettings := map[string]interface{}{
-		"certificates": []map[string]interface{}{
-			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-		},
-		"alpn": []string{"h2", "http/1.1"},
-	}
-	for k, val := range tlsVersionSettings(params) {
-		tlsSettings[k] = val
-	}
+	// WS 协议走 Nginx 反代，Nginx 终结 TLS，后端不需要 TLS
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vless",
@@ -132,9 +124,8 @@ func (v *VlessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, er
 			"decryption": "none",
 		},
 		"streamSettings": map[string]interface{}{
-			"network":     "ws",
-			"security":    "tls",
-			"tlsSettings": tlsSettings,
+			"network":  "ws",
+			"security": "none",
 			"wsSettings": map[string]interface{}{
 				"path": params.Path,
 			},
@@ -217,20 +208,12 @@ type VlessGRPCTLS struct{}
 
 func (v *VlessGRPCTLS) Name() string          { return "vless_grpc_tls" }
 func (v *VlessGRPCTLS) CoreType() string      { return "xray" }
-func (v *VlessGRPCTLS) DefaultPort() int      { return 443 }
+func (v *VlessGRPCTLS) DefaultPort() int      { return 31298 }
 func (v *VlessGRPCTLS) TransportType() string { return "grpc" }
 func (v *VlessGRPCTLS) IsCDNCompatible() bool { return true }
 
 func (v *VlessGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
-	tlsSettings := map[string]interface{}{
-		"certificates": []map[string]interface{}{
-			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-		},
-		"alpn": []string{"h2"},
-	}
-	for k, val := range tlsVersionSettings(params) {
-		tlsSettings[k] = val
-	}
+	// gRPC 协议走 Nginx 反代，Nginx 终结 TLS，后端不需要 TLS
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vless",
@@ -240,9 +223,8 @@ func (v *VlessGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, 
 			"decryption": "none",
 		},
 		"streamSettings": map[string]interface{}{
-			"network":     "grpc",
-			"security":    "tls",
-			"tlsSettings": tlsSettings,
+			"network":  "grpc",
+			"security": "none",
 			"grpcSettings": map[string]interface{}{
 				"serviceName": params.ServiceName,
 			},

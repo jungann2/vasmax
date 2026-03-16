@@ -15,7 +15,7 @@ type TrojanTCPTLS struct{}
 
 func (t *TrojanTCPTLS) Name() string          { return "trojan_tcp_tls" }
 func (t *TrojanTCPTLS) CoreType() string      { return "xray" }
-func (t *TrojanTCPTLS) DefaultPort() int      { return 443 }
+func (t *TrojanTCPTLS) DefaultPort() int      { return 31299 }
 func (t *TrojanTCPTLS) TransportType() string { return "tcp" }
 func (t *TrojanTCPTLS) IsCDNCompatible() bool { return false }
 
@@ -102,20 +102,12 @@ type TrojanGRPCTLS struct{}
 
 func (t *TrojanGRPCTLS) Name() string          { return "trojan_grpc_tls" }
 func (t *TrojanGRPCTLS) CoreType() string      { return "xray" }
-func (t *TrojanGRPCTLS) DefaultPort() int      { return 443 }
+func (t *TrojanGRPCTLS) DefaultPort() int      { return 31300 }
 func (t *TrojanGRPCTLS) TransportType() string { return "grpc" }
 func (t *TrojanGRPCTLS) IsCDNCompatible() bool { return true }
 
 func (t *TrojanGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
-	tlsSettings := map[string]interface{}{
-		"certificates": []map[string]interface{}{
-			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-		},
-		"alpn": []string{"h2"},
-	}
-	for k, val := range tlsVersionSettings(params) {
-		tlsSettings[k] = val
-	}
+	// gRPC 协议走 Nginx 反代，Nginx 终结 TLS，后端不需要 TLS
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "trojan",
@@ -124,9 +116,8 @@ func (t *TrojanGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage,
 			"clients": buildTrojanClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":     "grpc",
-			"security":    "tls",
-			"tlsSettings": tlsSettings,
+			"network":  "grpc",
+			"security": "none",
 			"grpcSettings": map[string]interface{}{
 				"serviceName": params.ServiceName,
 			},

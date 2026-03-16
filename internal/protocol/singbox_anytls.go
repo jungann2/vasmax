@@ -14,7 +14,7 @@ type AnyTLS struct{}
 
 func (a *AnyTLS) Name() string          { return "anytls" }
 func (a *AnyTLS) CoreType() string      { return "singbox" }
-func (a *AnyTLS) DefaultPort() int      { return 443 }
+func (a *AnyTLS) DefaultPort() int      { return 31303 }
 func (a *AnyTLS) TransportType() string { return "tcp" }
 func (a *AnyTLS) IsCDNCompatible() bool { return false }
 

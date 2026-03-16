@@ -15,20 +15,12 @@ type VMessWSTLS struct{}
 
 func (v *VMessWSTLS) Name() string          { return "vmess_ws_tls" }
 func (v *VMessWSTLS) CoreType() string      { return "xray" }
-func (v *VMessWSTLS) DefaultPort() int      { return 443 }
+func (v *VMessWSTLS) DefaultPort() int      { return 31301 }
 func (v *VMessWSTLS) TransportType() string { return "ws" }
 func (v *VMessWSTLS) IsCDNCompatible() bool { return true }
 
 func (v *VMessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
-	tlsSettings := map[string]interface{}{
-		"certificates": []map[string]interface{}{
-			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-		},
-		"alpn": []string{"h2", "http/1.1"},
-	}
-	for k, val := range tlsVersionSettings(params) {
-		tlsSettings[k] = val
-	}
+	// WS 协议走 Nginx 反代，Nginx 终结 TLS，后端不需要 TLS
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vmess",
@@ -37,9 +29,8 @@ func (v *VMessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, er
 			"clients": buildVMessClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":     "ws",
-			"security":    "tls",
-			"tlsSettings": tlsSettings,
+			"network":  "ws",
+			"security": "none",
 			"wsSettings": map[string]interface{}{
 				"path": params.Path,
 			},
@@ -136,20 +127,12 @@ type VMessHTTPUpgradeTLS struct{}
 
 func (v *VMessHTTPUpgradeTLS) Name() string          { return "vmess_httpupgrade_tls" }
 func (v *VMessHTTPUpgradeTLS) CoreType() string      { return "xray" }
-func (v *VMessHTTPUpgradeTLS) DefaultPort() int      { return 443 }
+func (v *VMessHTTPUpgradeTLS) DefaultPort() int      { return 31302 }
 func (v *VMessHTTPUpgradeTLS) TransportType() string { return "httpupgrade" }
 func (v *VMessHTTPUpgradeTLS) IsCDNCompatible() bool { return true }
 
 func (v *VMessHTTPUpgradeTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error) {
-	tlsSettings := map[string]interface{}{
-		"certificates": []map[string]interface{}{
-			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
-		},
-		"alpn": []string{"h2", "http/1.1"},
-	}
-	for k, val := range tlsVersionSettings(params) {
-		tlsSettings[k] = val
-	}
+	// HTTPUpgrade 协议走 Nginx 反代，Nginx 终结 TLS，后端不需要 TLS
 	inbound := map[string]interface{}{
 		"port":     params.Port,
 		"protocol": "vmess",
@@ -158,9 +141,8 @@ func (v *VMessHTTPUpgradeTLS) GenerateInbound(params *InboundParams) (json.RawMe
 			"clients": buildVMessClients(params.Users),
 		},
 		"streamSettings": map[string]interface{}{
-			"network":     "httpupgrade",
-			"security":    "tls",
-			"tlsSettings": tlsSettings,
+			"network":  "httpupgrade",
+			"security": "none",
 			"httpupgradeSettings": map[string]interface{}{
 				"path": params.Path,
 				"host": params.Domain,

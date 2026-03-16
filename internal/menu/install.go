@@ -798,7 +798,7 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 
 		info := &protocol.ServerInfo{
 			Host: serverIP,
-			Port: p.DefaultPort(),
+			Port: externalPort(p),
 		}
 
 		// Reality 协议使用 Reality 配置
@@ -999,7 +999,7 @@ func (m *InstallMenu) showInstalled() {
 		// 构建 ServerInfo
 		info := &protocol.ServerInfo{
 			Host: serverIP,
-			Port: p.DefaultPort(),
+			Port: externalPort(p),
 		}
 
 		// 根据安装模式填充不同字段
@@ -1275,6 +1275,15 @@ func needsNginxProxy(p protocol.Protocol) bool {
 	return transport == "ws" || transport == "grpc" || transport == "httpupgrade"
 }
 
+// externalPort 返回协议的外部端口（客户端连接用）
+// Nginx 反代协议外部端口为 443，其他协议使用自身端口
+func externalPort(p protocol.Protocol) int {
+	if needsNginxProxy(p) {
+		return 443
+	}
+	return p.DefaultPort()
+}
+
 // defaultWSPath 为协议生成默认的 WS/HTTPUpgrade 路径
 func defaultWSPath(p protocol.Protocol) string {
 	// 每个协议用不同路径避免冲突
@@ -1507,7 +1516,7 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 
 		info := &protocol.ServerInfo{
 			Host: serverIP,
-			Port: p.DefaultPort(),
+			Port: externalPort(p),
 		}
 
 		// 域名模式协议使用域名
