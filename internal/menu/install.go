@@ -39,6 +39,12 @@ type InstallMenu struct {
 	logger      *logrus.Logger
 }
 
+// certPair 存储域名对应的证书和私钥路径
+type certPair struct {
+	cert string
+	key  string
+}
+
 // NewInstallMenu creates a new install menu.
 func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, rbMgr *rollback.Manager, nginxMgr *nginx.Manager, userMgr *user.Manager, subMgr *subscription.Manager, logger *logrus.Logger) *InstallMenu {
 	return &InstallMenu{config: cfg, coreMgr: coreMgr, registry: reg, rollbackMgr: rbMgr, nginxMgr: nginxMgr, userMgr: userMgr, subMgr: subMgr, logger: logger}
@@ -126,16 +132,51 @@ func (m *InstallMenu) installCombination() {
 		return
 	}
 
-	// 域名输入
-	domain := ReadInput("请输入域名")
-	if domain == "" {
-		PrintError("此安装方式需要域名，如无域名请使用一键 Reality 组合安装")
-		return
+	// 域名模式选择：统一域名 or 每个协议独立域名
+	// protocolDomains 存储每个协议对应的域名
+	protocolDomains := make(map[string]string)
+	multiDomainMode := false
+
+	if len(selected) > 1 {
+		fmt.Println()
+		PrintOption(1, "所有协议使用同一域名")
+		PrintOption(2, "每个协议使用不同域名")
+		domainChoice := ReadChoice("请选择域名模式", []string{"1", "2"})
+		multiDomainMode = domainChoice == "2"
 	}
-	if err := security.ValidateDomain(domain); err != nil {
-		PrintError(fmt.Sprintf("域名无效: %v", err))
-		return
+
+	if !multiDomainMode {
+		// 统一域名模式
+		domain := ReadInput("请输入域名")
+		if domain == "" {
+			PrintError("此安装方式需要域名，如无域名请使用一键 Reality 组合安装")
+			return
+		}
+		if err := security.ValidateDomain(domain); err != nil {
+			PrintError(fmt.Sprintf("域名无效: %v", err))
+			return
+		}
+		for _, p := range selected {
+			protocolDomains[p.Name()] = domain
+		}
+	} else {
+		// 每个协议独立域名
+		for _, p := range selected {
+			domain := ReadInput(fmt.Sprintf("%s 域名", p.Name()))
+			if domain == "" {
+				PrintError(fmt.Sprintf("%s 需要域名，安装中止", p.Name()))
+				return
+			}
+			if err := security.ValidateDomain(domain); err != nil {
+				PrintError(fmt.Sprintf("域名无效: %v", err))
+				return
+			}
+			protocolDomains[p.Name()] = domain
+		}
 	}
+
+	// 取第一个域名作为主域名（用于全局 TLS 配置）
+	primaryDomain := protocolDomains[selected[0].Name()]
 
 	// 区分需要 TLS 证书的协议和 Reality 协议
 	var needTLSCert bool
@@ -191,63 +232,86 @@ func (m *InstallMenu) installCombination() {
 		fmt.Println()
 	}
 
-	// TLS 证书检测与申请
-	certFile := m.config.TLS.CertFile
-	keyFile := m.config.TLS.KeyFile
+	// TLS 证书检测与申请（按域名去重，每个唯一域名只检测/申请一次）
+	// domainCerts 存储每个域名对应的证书路径
+	domainCerts := make(map[string]*certPair)
+
 	if needTLSCert {
-		// 先尝试自动检测已有证书（VasmaX 目录、acme.sh、BT 面板、1Panel）
-		m.config.TLS.Domain = domain
-		certFile, keyFile = config.DetectCertPath(&m.config.TLS)
-		if certFile != "" && keyFile != "" {
-			// 如果证书在 acme.sh 目录中，自动 install-cert 到 VasmaX TLS 目录
-			if strings.Contains(certFile, ".acme.sh") {
-				PrintInfo(fmt.Sprintf("检测到 acme.sh 证书: %s", certFile))
-				PrintInfo("正在安装证书到 VasmaX TLS 目录...")
-				installed, iKey := m.installAcmeCertToTLS(domain)
-				if installed != "" && iKey != "" {
-					certFile = installed
-					keyFile = iKey
-					PrintSuccess(fmt.Sprintf("证书已安装到: %s", certFile))
-				} else {
-					PrintWarning("证书安装失败，将直接使用 acme.sh 源路径")
-				}
-			} else {
-				PrintSuccess(fmt.Sprintf("已自动检测到 TLS 证书: %s", certFile))
+		// 收集所有需要 TLS 证书的唯一域名（保持顺序）
+		var uniqueDomains []string
+		seen := make(map[string]bool)
+		for _, p := range selected {
+			if strings.Contains(p.Name(), "reality") || p.Name() == "socks5" {
+				continue
 			}
-		} else {
-			// 未自动检测到，提供多种选择
-			PrintWarning("未自动检测到 TLS 证书")
-			PrintInfo("域名模式协议需要 TLS 证书才能正常工作")
-			fmt.Println()
-			PrintOption(1, "申请新证书（acme.sh）")
-			PrintOption(2, "手动指定证书路径")
-			PrintOption(3, "跳过，稍后在 TLS 证书管理中申请")
-			choice := ReadChoice("请选择", []string{"1", "2", "3"})
-			switch choice {
-			case "1":
-				certFile, keyFile = m.inlineIssueCert(domain)
-				if certFile == "" || keyFile == "" {
-					PrintError("证书申请失败，安装中止")
-					return
+			d := protocolDomains[p.Name()]
+			if !seen[d] {
+				seen[d] = true
+				uniqueDomains = append(uniqueDomains, d)
+			}
+		}
+
+		for _, domain := range uniqueDomains {
+			if len(uniqueDomains) > 1 {
+				PrintSeparator()
+				PrintInfo(fmt.Sprintf("正在处理域名: %s", domain))
+			}
+
+			// 先尝试自动检测已有证书
+			tlsCfg := config.TLSConfig{Domain: domain, CertFile: m.config.TLS.CertFile, KeyFile: m.config.TLS.KeyFile}
+			certFile, keyFile := config.DetectCertPath(&tlsCfg)
+			if certFile != "" && keyFile != "" {
+				if strings.Contains(certFile, ".acme.sh") {
+					PrintInfo(fmt.Sprintf("检测到 acme.sh 证书: %s", certFile))
+					PrintInfo("正在安装证书到 VasmaX TLS 目录...")
+					installed, iKey := m.installAcmeCertToTLS(domain)
+					if installed != "" && iKey != "" {
+						certFile = installed
+						keyFile = iKey
+						PrintSuccess(fmt.Sprintf("证书已安装到: %s", certFile))
+					} else {
+						PrintWarning("证书安装失败，将直接使用 acme.sh 源路径")
+					}
+				} else {
+					PrintSuccess(fmt.Sprintf("已自动检测到 TLS 证书: %s", certFile))
 				}
-			case "2":
-				certFile = ReadInput("请输入证书文件路径（fullchain.crt 或 .pem）")
-				keyFile = ReadInput("请输入私钥文件路径（.key）")
-				if certFile == "" || keyFile == "" {
-					PrintError("证书路径不能为空")
-					return
+				domainCerts[domain] = &certPair{certFile, keyFile}
+			} else {
+				PrintWarning(fmt.Sprintf("未自动检测到 %s 的 TLS 证书", domain))
+				PrintInfo("域名模式协议需要 TLS 证书才能正常工作")
+				fmt.Println()
+				PrintOption(1, "申请新证书（acme.sh）")
+				PrintOption(2, "手动指定证书路径")
+				PrintOption(3, "跳过，稍后在 TLS 证书管理中申请")
+				choice := ReadChoice("请选择", []string{"1", "2", "3"})
+				switch choice {
+				case "1":
+					certFile, keyFile = m.inlineIssueCert(domain)
+					if certFile == "" || keyFile == "" {
+						PrintError("证书申请失败，安装中止")
+						return
+					}
+					domainCerts[domain] = &certPair{certFile, keyFile}
+				case "2":
+					certFile = ReadInput("请输入证书文件路径（fullchain.crt 或 .pem）")
+					keyFile = ReadInput("请输入私钥文件路径（.key）")
+					if certFile == "" || keyFile == "" {
+						PrintError("证书路径不能为空")
+						return
+					}
+					if !fileExists(certFile) {
+						PrintError(fmt.Sprintf("证书文件不存在: %s", certFile))
+						return
+					}
+					if !fileExists(keyFile) {
+						PrintError(fmt.Sprintf("私钥文件不存在: %s", keyFile))
+						return
+					}
+					PrintSuccess(fmt.Sprintf("已指定证书: %s", certFile))
+					domainCerts[domain] = &certPair{certFile, keyFile}
+				default:
+					PrintWarning("跳过证书申请，非 Reality 协议将无法正常工作直到申请证书并重新安装")
 				}
-				if !fileExists(certFile) {
-					PrintError(fmt.Sprintf("证书文件不存在: %s", certFile))
-					return
-				}
-				if !fileExists(keyFile) {
-					PrintError(fmt.Sprintf("私钥文件不存在: %s", keyFile))
-					return
-				}
-				PrintSuccess(fmt.Sprintf("已指定证书: %s", certFile))
-			default:
-				PrintWarning("跳过证书申请，非 Reality 协议将无法正常工作直到申请证书并重新安装")
 			}
 		}
 	}
@@ -346,6 +410,12 @@ func (m *InstallMenu) installCombination() {
 			m.config.ProtocolPorts[p.Name()] = p.DefaultPort()
 		}
 
+		// 记录协议独立域名
+		if m.config.ProtocolDomains == nil {
+			m.config.ProtocolDomains = make(map[string]string)
+		}
+		m.config.ProtocolDomains[p.Name()] = protocolDomains[p.Name()]
+
 		PrintSuccess(fmt.Sprintf("%s 安装完成", p.Name()))
 	}
 
@@ -374,11 +444,13 @@ func (m *InstallMenu) installCombination() {
 		if customPort, ok := portOverrides[p.Name()]; ok {
 			port = customPort
 		}
+		// 使用协议对应的域名
+		protoDomain := protocolDomains[p.Name()]
 		params := &protocol.InboundParams{
 			Port:   port,
 			Users:  apiUsers,
 			Tag:    p.Name(),
-			Domain: domain,
+			Domain: protoDomain,
 		}
 
 		// Reality 协议使用 Reality 配置
@@ -387,10 +459,12 @@ func (m *InstallMenu) installCombination() {
 			params.Port = m.config.Reality.EffectivePort()
 		}
 
-		// 非 Reality、非 socks5 协议使用 TLS 证书
+		// 非 Reality、非 socks5 协议使用对应域名的 TLS 证书
 		if !strings.Contains(p.Name(), "reality") && p.Name() != "socks5" {
-			params.CertFile = certFile
-			params.KeyFile = keyFile
+			if cp, ok := domainCerts[protoDomain]; ok {
+				params.CertFile = cp.cert
+				params.KeyFile = cp.key
+			}
 		}
 
 		// WS/HTTPUpgrade 协议设置路径
@@ -460,13 +534,11 @@ func (m *InstallMenu) installCombination() {
 		}
 	}
 
-	// 保存域名和证书路径到配置
-	m.config.TLS.Domain = domain
-	if certFile != "" {
-		m.config.TLS.CertFile = certFile
-	}
-	if keyFile != "" {
-		m.config.TLS.KeyFile = keyFile
+	// 保存域名和证书路径到配置（主域名 + 主域名证书）
+	m.config.TLS.Domain = primaryDomain
+	if cp, ok := domainCerts[primaryDomain]; ok {
+		m.config.TLS.CertFile = cp.cert
+		m.config.TLS.KeyFile = cp.key
 	}
 
 	// 保存配置
@@ -474,8 +546,8 @@ func (m *InstallMenu) installCombination() {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 	}
 
-	// 自动配置 Nginx 反代（ws/grpc/httpupgrade 协议需要）
-	m.autoConfigNginx(selected, domain)
+	// 自动配置 Nginx 反代（ws/grpc/httpupgrade 协议需要，支持多域名）
+	m.autoConfigNginxMultiDomain(selected, protocolDomains, domainCerts)
 
 	// 启动核心服务
 	if hasXrayProto {
@@ -506,14 +578,15 @@ func (m *InstallMenu) installCombination() {
 	}
 
 	// 显示证书文件路径
-	if certFile != "" || keyFile != "" {
+	if len(domainCerts) > 0 {
 		fmt.Println()
 		PrintInfo("TLS 证书文件路径:")
-		if certFile != "" {
-			PrintInfo(fmt.Sprintf("  证书文件: %s", certFile))
-		}
-		if keyFile != "" {
-			PrintInfo(fmt.Sprintf("  私钥文件: %s", keyFile))
+		for domain, cp := range domainCerts {
+			if len(domainCerts) > 1 {
+				PrintInfo(fmt.Sprintf("  域名: %s", domain))
+			}
+			PrintInfo(fmt.Sprintf("  证书文件: %s", cp.cert))
+			PrintInfo(fmt.Sprintf("  私钥文件: %s", cp.key))
 		}
 	}
 
@@ -525,7 +598,7 @@ func (m *InstallMenu) installCombination() {
 	// 显示安装结果和分享链接
 	PrintSuccess("域名组合安装完成")
 	fmt.Println()
-	m.showDomainInfo(users, domain)
+	m.showDomainInfo(users, primaryDomain)
 
 	// 清理快照
 	if snap != nil {
@@ -872,8 +945,14 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 		}
 
 		// 域名模式协议使用域名
-		if mode == "domain" && m.config.TLS.Domain != "" {
-			info.Domain = m.config.TLS.Domain
+		if mode == "domain" {
+			protoDomain := m.config.GetProtocolDomain(protoName)
+			if protoDomain == "" {
+				protoDomain = m.config.TLS.Domain
+			}
+			if protoDomain != "" {
+				info.Domain = protoDomain
+			}
 		}
 
 		// WS/HTTPUpgrade/gRPC 路径
@@ -1029,7 +1108,12 @@ func (m *InstallMenu) showInstalled() {
 		modeStr := ""
 		switch mode {
 		case "domain":
-			modeStr = Green(" (绑定域名)")
+			protoDomain := m.config.GetProtocolDomain(p)
+			if protoDomain != "" && protoDomain != m.config.TLS.Domain {
+				modeStr = Green(fmt.Sprintf(" (绑定域名: %s)", protoDomain))
+			} else {
+				modeStr = Green(" (绑定域名)")
+			}
 		case "nodomain":
 			modeStr = Cyan(" (无域名)")
 		}
@@ -1061,10 +1145,16 @@ func (m *InstallMenu) showInstalled() {
 		}
 
 		// 根据安装模式填充不同字段
-		if mode == "domain" && m.config.TLS.Domain != "" {
-			info.Domain = m.config.TLS.Domain
-			if m.config.CDN.Enabled && m.config.CDN.Address != "" {
-				info.CDNHost = m.config.CDN.Address
+		if mode == "domain" {
+			protoDomain := m.config.GetProtocolDomain(protoName)
+			if protoDomain == "" {
+				protoDomain = m.config.TLS.Domain
+			}
+			if protoDomain != "" {
+				info.Domain = protoDomain
+				if m.config.CDN.Enabled && m.config.CDN.Address != "" {
+					info.CDNHost = m.config.CDN.Address
+				}
 			}
 		}
 		if strings.Contains(protoName, "reality") {
@@ -1181,11 +1271,15 @@ func (m *InstallMenu) uninstallProtocol() {
 
 		// 3. 删除 Nginx 反代 location（如果是需要 Nginx 的协议）
 		if p, ok := m.registry.Get(name); ok {
-			if needsNginxProxy(p) && m.config.TLS.Domain != "" {
-				if err := m.nginxMgr.RemoveLocation(m.config.TLS.Domain, name); err != nil {
-					m.logger.WithError(err).Warnf("删除 Nginx location 失败: %s", name)
-				} else {
-					PrintInfo(fmt.Sprintf("已删除 Nginx 反代配置: %s", name))
+			if needsNginxProxy(p) {
+				// 使用协议独立域名或全局域名
+				protoDomain := m.config.GetProtocolDomain(name)
+				if protoDomain != "" {
+					if err := m.nginxMgr.RemoveLocation(protoDomain, name); err != nil {
+						m.logger.WithError(err).Warnf("删除 Nginx location 失败: %s", name)
+					} else {
+						PrintInfo(fmt.Sprintf("已删除 Nginx 反代配置: %s", name))
+					}
 				}
 			}
 			// 标记对应核心需要重启
@@ -1204,6 +1298,7 @@ func (m *InstallMenu) uninstallProtocol() {
 			}
 		}
 		delete(m.config.ProtocolModes, name)
+		delete(m.config.ProtocolDomains, name)
 
 		PrintSuccess(fmt.Sprintf("%s 已卸载", name))
 	}
@@ -1574,7 +1669,7 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 
 	serverIP := getServerIP()
 	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
-	PrintInfo(fmt.Sprintf("域名: %s", domain))
+	PrintInfo(fmt.Sprintf("主域名: %s", domain))
 	fmt.Println()
 
 	for _, protoName := range m.config.Protocols {
@@ -1590,9 +1685,13 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 			Port: externalPortWithConfig(p, m.config),
 		}
 
-		// 域名模式协议使用域名
+		// 域名模式协议使用协议独立域名（优先）或全局域名
 		if mode == "domain" {
-			info.Domain = domain
+			protoDomain := m.config.GetProtocolDomain(protoName)
+			if protoDomain == "" {
+				protoDomain = domain
+			}
+			info.Domain = protoDomain
 			if m.config.CDN.Enabled && m.config.CDN.Address != "" {
 				info.CDNHost = m.config.CDN.Address
 			}
@@ -1619,7 +1718,12 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 		}
 
 		PrintSeparator()
-		PrintInfo(fmt.Sprintf("协议: %s", protoName))
+		protoDomain := m.config.GetProtocolDomain(protoName)
+		if protoDomain != "" && protoDomain != domain {
+			PrintInfo(fmt.Sprintf("协议: %s  域名: %s", protoName, protoDomain))
+		} else {
+			PrintInfo(fmt.Sprintf("协议: %s", protoName))
+		}
 
 		for _, u := range users {
 			apiUser := u.ToAPIUser()
@@ -1729,6 +1833,126 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 			PrintInfo(fmt.Sprintf("  %s → grpc://127.0.0.1:%d/%s", loc.Type, loc.BackendPort, loc.Path))
 		} else {
 			PrintInfo(fmt.Sprintf("  %s → http://127.0.0.1:%d%s", loc.Type, loc.BackendPort, loc.Path))
+		}
+	}
+}
+
+// autoConfigNginxMultiDomain 支持多域名的 Nginx 自动配置
+func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, protocolDomains map[string]string, domainCerts map[string]*certPair) {
+	// 按域名分组收集需要 Nginx 反代的协议
+	type domainGroup struct {
+		domain    string
+		certFile  string
+		keyFile   string
+		locations []nginx.ProtocolLocation
+	}
+	groups := make(map[string]*domainGroup)
+	var domainOrder []string
+
+	for _, p := range installed {
+		if !needsNginxProxy(p) {
+			continue
+		}
+		domain := protocolDomains[p.Name()]
+		if domain == "" {
+			continue
+		}
+		if _, ok := groups[domain]; !ok {
+			groups[domain] = &domainGroup{domain: domain}
+			domainOrder = append(domainOrder, domain)
+			if cp, ok := domainCerts[domain]; ok {
+				groups[domain].certFile = cp.cert
+				groups[domain].keyFile = cp.key
+			}
+		}
+		transport := p.TransportType()
+		loc := nginx.ProtocolLocation{
+			Type:        transport,
+			BackendPort: p.DefaultPort(),
+		}
+		if transport == "grpc" {
+			loc.Path = defaultGRPCServiceName(p)
+		} else {
+			loc.Path = defaultWSPath(p)
+		}
+		groups[domain].locations = append(groups[domain].locations, loc)
+	}
+
+	if len(groups) == 0 {
+		return
+	}
+
+	// 检测 Nginx 版本，如果太旧则自动升级
+	if nginx.NeedUpgrade() {
+		oldVer := nginx.NginxVersionString()
+		PrintWarning(fmt.Sprintf("Nginx 版本过低（%s），需要 1.25.1+ 才支持 http2 指令", oldVer))
+		PrintInfo("正在自动升级 Nginx 到最新稳定版...")
+		if err := nginx.UpgradeNginx(); err != nil {
+			PrintError(fmt.Sprintf("Nginx 升级失败: %v", err))
+			PrintInfo("请手动升级 Nginx 后重新安装协议")
+			return
+		}
+		newVer := nginx.NginxVersionString()
+		PrintSuccess(fmt.Sprintf("Nginx 已升级: %s → %s", oldVer, newVer))
+	}
+
+	PrintInfo("正在自动配置 Nginx 反向代理...")
+
+	for _, domain := range domainOrder {
+		g := groups[domain]
+		certFile := g.certFile
+		keyFile := g.keyFile
+		if certFile == "" || keyFile == "" {
+			// 尝试从全局配置检测
+			certFile = m.config.TLS.CertFile
+			keyFile = m.config.TLS.KeyFile
+		}
+		if certFile == "" || keyFile == "" {
+			tlsCfg := config.TLSConfig{Domain: domain}
+			certFile, keyFile = config.DetectCertPath(&tlsCfg)
+		}
+		if certFile == "" || keyFile == "" {
+			PrintWarning(fmt.Sprintf("未找到 %s 的 TLS 证书，跳过该域名的 Nginx 配置", domain))
+			continue
+		}
+
+		params := &nginx.NginxParams{
+			Domain:    domain,
+			CertFile:  certFile,
+			KeyFile:   keyFile,
+			Protocols: g.locations,
+		}
+
+		if err := m.nginxMgr.GenerateConfig(params); err != nil {
+			PrintError(fmt.Sprintf("生成 %s 的 Nginx 配置失败: %v", domain, err))
+			continue
+		}
+
+		// 配置订阅路径（只在主域名上配置）
+		if err := m.nginxMgr.SetupSubscribeServer(domain); err != nil {
+			m.logger.WithError(err).Warn("配置订阅路径失败")
+		}
+	}
+
+	// 验证并重载 Nginx
+	if err := m.nginxMgr.Reload(); err != nil {
+		PrintError(fmt.Sprintf("Nginx 重载失败: %v", err))
+		PrintInfo("请手动检查 Nginx 配置: nginx -t")
+		return
+	}
+
+	PrintSuccess("Nginx 反向代理已自动配置")
+	for _, domain := range domainOrder {
+		g := groups[domain]
+		if len(domainOrder) > 1 {
+			PrintInfo(fmt.Sprintf("  域名: %s", domain))
+		}
+		for _, loc := range g.locations {
+			if loc.Type == "grpc" {
+				PrintInfo(fmt.Sprintf("  %s → grpc://127.0.0.1:%d/%s", loc.Type, loc.BackendPort, loc.Path))
+			} else {
+				PrintInfo(fmt.Sprintf("  %s → http://127.0.0.1:%d%s", loc.Type, loc.BackendPort, loc.Path))
+			}
 		}
 	}
 }

@@ -25,8 +25,9 @@ type Config struct {
 	Audit             AuditConfig        `yaml:"audit"`
 	Lang              string             `yaml:"lang"`
 	Protocols         []string           `yaml:"protocols"`
-	ProtocolModes     map[string]string  `yaml:"protocol_modes"` // 协议安装模式: "domain" 或 "nodomain"
-	ProtocolPorts     map[string]int     `yaml:"protocol_ports"` // 协议自定义端口
+	ProtocolModes     map[string]string  `yaml:"protocol_modes"`   // 协议安装模式: "domain" 或 "nodomain"
+	ProtocolPorts     map[string]int     `yaml:"protocol_ports"`   // 协议自定义端口
+	ProtocolDomains   map[string]string  `yaml:"protocol_domains"` // 协议独立域名（多域名模式）
 	CoreType          string             `yaml:"core_type"`
 	CDN               CDNConfig          `yaml:"cdn"`
 	Subscription      SubscriptionConfig `yaml:"subscription"`
@@ -171,6 +172,17 @@ func (c *Config) setDefaults() {
 	if c.ProtocolPorts == nil {
 		c.ProtocolPorts = make(map[string]int)
 	}
+	if c.ProtocolDomains == nil {
+		c.ProtocolDomains = make(map[string]string)
+	}
+}
+
+// GetProtocolDomain 返回协议的域名（优先使用独立域名，否则使用全局域名）
+func (c *Config) GetProtocolDomain(protoName string) string {
+	if d, ok := c.ProtocolDomains[protoName]; ok && d != "" {
+		return d
+	}
+	return c.TLS.Domain
 }
 
 // LoadConfig reads a YAML configuration file from path, unmarshals it into
