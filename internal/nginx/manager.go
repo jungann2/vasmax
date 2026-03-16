@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"vasmax/internal/security"
@@ -210,6 +211,169 @@ func (m *Manager) Reload() error {
 	}
 	m.logger.Info("nginx reloaded successfully")
 	return nil
+}
+
+// NginxVersion returns the installed Nginx version as (major, minor, patch).
+// Returns (0,0,0) if nginx is not installed or version cannot be parsed.
+func NginxVersion() (major, minor, patch int) {
+	cmd := exec.Command("nginx", "-v")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, 0
+	}
+	// nginx -v outputs to stderr: "nginx version: nginx/1.24.0"
+	line := strings.TrimSpace(string(output))
+	idx := strings.Index(line, "nginx/")
+	if idx == -1 {
+		return 0, 0, 0
+	}
+	verStr := line[idx+6:]
+	// strip anything after space (e.g. "(Ubuntu)")
+	if sp := strings.IndexByte(verStr, ' '); sp != -1 {
+		verStr = verStr[:sp]
+	}
+	parts := strings.Split(verStr, ".")
+	if len(parts) < 2 {
+		return 0, 0, 0
+	}
+	major, _ = strconv.Atoi(parts[0])
+	minor, _ = strconv.Atoi(parts[1])
+	if len(parts) >= 3 {
+		patch, _ = strconv.Atoi(parts[2])
+	}
+	return major, minor, patch
+}
+
+// NginxVersionString returns the version as a string like "1.24.0".
+func NginxVersionString() string {
+	maj, min, pat := NginxVersion()
+	if maj == 0 && min == 0 && pat == 0 {
+		return "未安装"
+	}
+	return fmt.Sprintf("%d.%d.%d", maj, min, pat)
+}
+
+// NeedUpgrade checks if Nginx needs upgrade for http2 directive support (requires >= 1.25.1).
+func NeedUpgrade() bool {
+	maj, min, pat := NginxVersion()
+	if maj == 0 && min == 0 && pat == 0 {
+		return false // not installed, will be handled elsewhere
+	}
+	// http2 on; directive requires nginx >= 1.25.1
+	if maj > 1 {
+		return false
+	}
+	if maj == 1 && min > 25 {
+		return false
+	}
+	if maj == 1 && min == 25 && pat >= 1 {
+		return false
+	}
+	return true
+}
+
+// UpgradeNginx upgrades Nginx to the latest stable version using the OS package manager.
+func UpgradeNginx() error {
+	// Detect OS and use appropriate upgrade method
+	if fileExistsNginx("/etc/debian_version") {
+		// Debian/Ubuntu: add official nginx repo and upgrade
+		return upgradeNginxDebian()
+	}
+	if fileExistsNginx("/etc/redhat-release") || fileExistsNginx("/etc/centos-release") {
+		return upgradeNginxRHEL()
+	}
+	return fmt.Errorf("不支持的操作系统，请手动升级 Nginx 到 1.25.1+")
+}
+
+func upgradeNginxDebian() error {
+	// Install prerequisites
+	cmds := [][]string{
+		{"apt-get", "install", "-y", "curl", "gnupg2", "ca-certificates", "lsb-release"},
+	}
+	for _, c := range cmds {
+		cmd := exec.Command(c[0], c[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	}
+
+	// Add nginx official signing key
+	keyCmd := exec.Command("bash", "-c", "curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg --yes")
+	keyCmd.Stdout = os.Stdout
+	keyCmd.Stderr = os.Stderr
+	if err := keyCmd.Run(); err != nil {
+		return fmt.Errorf("添加 Nginx GPG 密钥失败: %w", err)
+	}
+
+	// Detect codename
+	codeOut, err := exec.Command("bash", "-c", "lsb_release -cs 2>/dev/null || echo jammy").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("检测系统版本失败: %w", err)
+	}
+	codename := strings.TrimSpace(string(codeOut))
+
+	// Add nginx stable repo
+	repoLine := fmt.Sprintf("deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/ubuntu %s nginx", codename)
+	// Try ubuntu first, fallback to debian
+	distOut, _ := exec.Command("bash", "-c", "cat /etc/os-release | grep ^ID= | cut -d= -f2").CombinedOutput()
+	distID := strings.TrimSpace(strings.Trim(string(distOut), "\""))
+	if distID == "debian" {
+		repoLine = fmt.Sprintf("deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/debian %s nginx", codename)
+	}
+
+	if err := os.WriteFile("/etc/apt/sources.list.d/nginx.list", []byte(repoLine+"\n"), 0644); err != nil {
+		return fmt.Errorf("写入 Nginx 源失败: %w", err)
+	}
+
+	// Pin nginx packages to prefer official repo
+	pinContent := "Package: *\nPin: origin nginx.org\nPin-Priority: 900\n"
+	_ = os.WriteFile("/etc/apt/preferences.d/99nginx", []byte(pinContent), 0644)
+
+	// Update and install
+	updateCmd := exec.Command("apt-get", "update")
+	updateCmd.Stdout = os.Stdout
+	updateCmd.Stderr = os.Stderr
+	if err := updateCmd.Run(); err != nil {
+		return fmt.Errorf("apt-get update 失败: %w", err)
+	}
+
+	installCmd := exec.Command("apt-get", "install", "-y", "nginx")
+	installCmd.Stdout = os.Stdout
+	installCmd.Stderr = os.Stderr
+	if err := installCmd.Run(); err != nil {
+		return fmt.Errorf("Nginx 升级失败: %w", err)
+	}
+
+	return nil
+}
+
+func upgradeNginxRHEL() error {
+	// Add nginx official repo
+	repoContent := `[nginx-mainline]
+name=nginx mainline repo
+baseurl=https://nginx.org/packages/mainline/centos/$releasever/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+`
+	if err := os.WriteFile("/etc/yum.repos.d/nginx-mainline.repo", []byte(repoContent), 0644); err != nil {
+		return fmt.Errorf("写入 Nginx 源失败: %w", err)
+	}
+
+	installCmd := exec.Command("yum", "install", "-y", "nginx")
+	installCmd.Stdout = os.Stdout
+	installCmd.Stderr = os.Stderr
+	if err := installCmd.Run(); err != nil {
+		return fmt.Errorf("Nginx 升级失败: %w", err)
+	}
+
+	return nil
+}
+
+func fileExistsNginx(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // removeBlock removes a named block delimited by BEGIN/END markers.

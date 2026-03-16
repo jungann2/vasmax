@@ -413,8 +413,10 @@ func (m *InstallMenu) installCombination() {
 		}
 	}
 	if hasSingBoxProto {
-		PrintInfo("正在启动 sing-box...")
-		if err := m.coreMgr.RestartSingBox(); err != nil {
+		PrintInfo("正在合并 sing-box 配置并启动...")
+		if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
+			PrintError(fmt.Sprintf("sing-box 配置合并失败: %v", err))
+		} else if err := m.coreMgr.RestartSingBox(); err != nil {
 			PrintWarning(fmt.Sprintf("启动 sing-box 失败: %v（可能需要手动启动）", err))
 		}
 	}
@@ -1554,6 +1556,20 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 		PrintWarning("未找到 TLS 证书，跳过 Nginx 自动配置")
 		PrintInfo("请先通过 TLS 证书管理申请证书，然后重新安装协议")
 		return
+	}
+
+	// 检测 Nginx 版本，如果太旧则自动升级
+	if nginx.NeedUpgrade() {
+		oldVer := nginx.NginxVersionString()
+		PrintWarning(fmt.Sprintf("Nginx 版本过低（%s），需要 1.25.1+ 才支持 http2 指令", oldVer))
+		PrintInfo("正在自动升级 Nginx 到最新稳定版...")
+		if err := nginx.UpgradeNginx(); err != nil {
+			PrintError(fmt.Sprintf("Nginx 升级失败: %v", err))
+			PrintInfo("请手动升级 Nginx 后重新安装协议")
+			return
+		}
+		newVer := nginx.NginxVersionString()
+		PrintSuccess(fmt.Sprintf("Nginx 已升级: %s → %s", oldVer, newVer))
 	}
 
 	PrintInfo("正在自动配置 Nginx 反向代理...")
