@@ -152,27 +152,46 @@ func (m *InstallMenu) installCombination() {
 	certFile := m.config.TLS.CertFile
 	keyFile := m.config.TLS.KeyFile
 	if needTLSCert {
-		// 先尝试检测已有证书
+		// 先尝试自动检测已有证书（VasmaX 目录、acme.sh、BT 面板、1Panel）
 		m.config.TLS.Domain = domain
 		certFile, keyFile = config.DetectCertPath(&m.config.TLS)
-		if certFile == "" || keyFile == "" {
-			PrintWarning("未找到 TLS 证书")
+		if certFile != "" && keyFile != "" {
+			PrintSuccess(fmt.Sprintf("已自动检测到 TLS 证书: %s", certFile))
+		} else {
+			// 未自动检测到，提供多种选择
+			PrintWarning("未自动检测到 TLS 证书")
 			PrintInfo("域名模式协议需要 TLS 证书才能正常工作")
 			fmt.Println()
-			PrintOption(1, "立即申请证书（acme.sh）")
-			PrintOption(2, "跳过，稍后在 TLS 证书管理中申请")
-			choice := ReadChoice("请选择", []string{"1", "2"})
-			if choice == "1" {
+			PrintOption(1, "申请新证书（acme.sh）")
+			PrintOption(2, "手动指定证书路径")
+			PrintOption(3, "跳过，稍后在 TLS 证书管理中申请")
+			choice := ReadChoice("请选择", []string{"1", "2", "3"})
+			switch choice {
+			case "1":
 				certFile, keyFile = m.inlineIssueCert(domain)
 				if certFile == "" || keyFile == "" {
 					PrintError("证书申请失败，安装中止")
 					return
 				}
-			} else {
+			case "2":
+				certFile = ReadInput("请输入证书文件路径（fullchain.crt 或 .pem）")
+				keyFile = ReadInput("请输入私钥文件路径（.key）")
+				if certFile == "" || keyFile == "" {
+					PrintError("证书路径不能为空")
+					return
+				}
+				if !fileExists(certFile) {
+					PrintError(fmt.Sprintf("证书文件不存在: %s", certFile))
+					return
+				}
+				if !fileExists(keyFile) {
+					PrintError(fmt.Sprintf("私钥文件不存在: %s", keyFile))
+					return
+				}
+				PrintSuccess(fmt.Sprintf("已指定证书: %s", certFile))
+			default:
 				PrintWarning("跳过证书申请，非 Reality 协议将无法正常工作直到申请证书并重新安装")
 			}
-		} else {
-			PrintSuccess(fmt.Sprintf("已检测到 TLS 证书: %s", certFile))
 		}
 	}
 
@@ -1376,9 +1395,14 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			PrintError(fmt.Sprintf("证书申请失败: %v", err))
-			PrintInfo("可以重新选择其他验证方式")
-			continue
+			// acme.sh exit code 2 = cert exists and not expired ("Skipping, next renewal time is ...")
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
+				PrintInfo("证书已存在且未过期，直接安装已有证书...")
+			} else {
+				PrintError(fmt.Sprintf("证书申请失败: %v", err))
+				PrintInfo("可以重新选择其他验证方式")
+				continue
+			}
 		}
 		break
 	}
