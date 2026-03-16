@@ -37,10 +37,9 @@ func (m *ToolsMenu) Show() {
 		PrintOption(2, "伪装站管理")
 		PrintOption(3, "健康检查")
 		PrintOption(4, fmt.Sprintf("BBR 加速管理（当前: %s）", bbrStatus()))
-		PrintOption(5, "卸载 VasmaX")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4"})
 		switch choice {
 		case "1":
 			m.cdnMenu()
@@ -50,8 +49,6 @@ func (m *ToolsMenu) Show() {
 			m.healthCheck()
 		case "4":
 			m.bbrMenu()
-		case "5":
-			m.uninstall()
 		case "0":
 			return
 		}
@@ -154,20 +151,6 @@ func (m *ToolsMenu) healthCheck() {
 	} else {
 		PrintWarning("存在不健康组件，请检查日志")
 	}
-}
-
-func (m *ToolsMenu) uninstall() {
-	PrintWarning("此操作将完全卸载 VasmaX 及所有相关组件")
-	if !Confirm("确认卸载?") {
-		return
-	}
-	if !Confirm("再次确认: 所有配置和数据将被删除") {
-		return
-	}
-	PrintInfo("卸载功能需要通过 install.sh 执行")
-	PrintInfo("请运行: bash install.sh uninstall")
-	PrintWarning("注意: acme.sh 证书配置不会被自动移除")
-	PrintInfo("如需清理请手动执行: ~/.acme.sh/acme.sh --uninstall")
 }
 
 // bbrStatus 返回当前 BBR 状态描述（用于主菜单显示）

@@ -2,6 +2,8 @@ package menu
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -81,37 +83,41 @@ func (m *MainMenu) Show() {
 		m.printHeader()
 		m.printOptions()
 
-		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"}
+		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}
 		choice := ReadChoice(i18n.T("menu.select"), choices)
 
 		switch choice {
 		case "1":
-			m.install.Show()
+			m.updateSelf()
 		case "2":
-			m.account.Show()
+			m.uninstallSelf()
 		case "3":
-			m.routing.Show()
+			m.install.Show()
 		case "4":
-			m.routing.ShowBTMenu()
+			m.account.Show()
 		case "5":
-			m.routing.ShowBlacklistMenu()
+			m.routing.Show()
 		case "6":
-			m.tools.ShowCDNMenu()
+			m.routing.ShowBTMenu()
 		case "7":
-			m.subMenu.Show()
+			m.routing.ShowBlacklistMenu()
 		case "8":
-			m.portMenu.Show()
+			m.tools.ShowCDNMenu()
 		case "9":
-			m.alpnMenu.Show()
+			m.subMenu.Show()
 		case "10":
-			m.coreMenu.Show()
+			m.portMenu.Show()
 		case "11":
-			m.xboard.Show()
+			m.alpnMenu.Show()
 		case "12":
-			m.tls.Show()
+			m.coreMenu.Show()
 		case "13":
-			m.tools.Show()
+			m.xboard.Show()
 		case "14":
+			m.tls.Show()
+		case "15":
+			m.tools.Show()
+		case "16":
 			m.monitor.Show()
 		case "0":
 			return
@@ -198,20 +204,109 @@ func (m *MainMenu) printHeader() {
 }
 
 func (m *MainMenu) printOptions() {
-	PrintOption(1, "安装管理")
-	PrintOption(2, "账号管理")
-	PrintOption(3, "分流工具")
-	PrintOption(4, "BT 下载管理")
-	PrintOption(5, "域名黑名单")
-	PrintOption(6, "CDN 管理")
-	PrintOption(7, "订阅管理")
-	PrintOption(8, "额外端口管理")
-	PrintOption(9, "ALPN 切换")
-	PrintOption(10, "核心管理")
-	PrintOption(11, "Xboard2 对接管理")
-	PrintOption(12, "TLS 证书管理")
-	PrintOption(13, "其他工具（BBR/CDN管理/伪装站管理/健康检查）")
-	PrintOption(14, "实时监控")
+	PrintOption(1, "更新 VasmaX")
+	PrintOption(2, "卸载 VasmaX")
+	PrintSeparator()
+	PrintOption(3, "安装管理")
+	PrintOption(4, "账号管理")
+	PrintOption(5, "分流工具")
+	PrintOption(6, "BT 下载管理")
+	PrintOption(7, "域名黑名单")
+	PrintOption(8, "CDN 管理")
+	PrintOption(9, "订阅管理")
+	PrintOption(10, "额外端口管理")
+	PrintOption(11, "ALPN 切换")
+	PrintOption(12, "核心管理")
+	PrintOption(13, "Xboard2 对接管理")
+	PrintOption(14, "TLS 证书管理")
+	PrintOption(15, "其他工具（BBR/伪装站管理/健康检查）")
+	PrintOption(16, "实时监控")
 	PrintOptionStr("0", "退出")
 	fmt.Println()
+}
+
+// updateSelf 更新 VasmaX 自身
+func (m *MainMenu) updateSelf() {
+	PrintInfo("正在检查 VasmaX 更新...")
+
+	// 通过 install.sh update 执行更新
+	installScript := "/usr/local/bin/install_vasmax.sh"
+	if _, err := os.Stat(installScript); os.IsNotExist(err) {
+		// 尝试从 GitHub 下载最新 install.sh 并执行
+		PrintInfo("正在下载最新安装脚本...")
+		cmd := exec.Command("bash", "-c",
+			"curl -fsSL https://raw.githubusercontent.com/prlina01/VasmaX/main/install.sh -o /tmp/vasmax_update.sh && bash /tmp/vasmax_update.sh update")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			PrintError(fmt.Sprintf("更新失败: %v", err))
+			return
+		}
+	} else {
+		cmd := exec.Command("bash", installScript, "update")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			PrintError(fmt.Sprintf("更新失败: %v", err))
+			return
+		}
+	}
+	PrintSuccess("VasmaX 更新完成，请重新启动菜单")
+	os.Exit(0)
+}
+
+// uninstallSelf 卸载 VasmaX
+func (m *MainMenu) uninstallSelf() {
+	PrintWarning("此操作将完全卸载 VasmaX 及所有相关组件")
+	if !Confirm("确认卸载?") {
+		return
+	}
+
+	fmt.Println()
+	PrintOption(1, "保留配置卸载")
+	PrintOption(2, "完全清除（含配置和数据）")
+	choice := ReadChoice("请选择", []string{"1", "2"})
+
+	purge := ""
+	if choice == "2" {
+		if !Confirm("再次确认: 所有配置和数据将被永久删除") {
+			return
+		}
+		purge = "--purge"
+	}
+
+	// 通过 install.sh uninstall 执行卸载
+	installScript := "/usr/local/bin/install_vasmax.sh"
+	if _, err := os.Stat(installScript); os.IsNotExist(err) {
+		PrintInfo("正在下载卸载脚本...")
+		cmdStr := "curl -fsSL https://raw.githubusercontent.com/prlina01/VasmaX/main/install.sh -o /tmp/vasmax_uninstall.sh && bash /tmp/vasmax_uninstall.sh uninstall"
+		if purge != "" {
+			cmdStr += " " + purge
+		}
+		cmd := exec.Command("bash", "-c", cmdStr)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			PrintError(fmt.Sprintf("卸载失败: %v", err))
+			return
+		}
+	} else {
+		args := []string{installScript, "uninstall"}
+		if purge != "" {
+			args = append(args, purge)
+		}
+		cmd := exec.Command("bash", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		if err := cmd.Run(); err != nil {
+			PrintError(fmt.Sprintf("卸载失败: %v", err))
+			return
+		}
+	}
+	PrintSuccess("VasmaX 已卸载")
+	os.Exit(0)
 }

@@ -46,10 +46,9 @@ func (m *CoreMenu) Show() {
 		PrintOption(7, "更新 GeoData")
 		PrintOption(8, "重启所有核心")
 		PrintOption(9, "停止所有核心")
-		PrintOption(10, "自更新 VasmaX")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"})
 		switch choice {
 		case "1":
 			m.updateCore("xray")
@@ -77,8 +76,6 @@ func (m *CoreMenu) Show() {
 			} else {
 				PrintSuccess("所有核心已停止")
 			}
-		case "10":
-			PrintInfo("自更新功能 - TODO")
 		case "0":
 			return
 		}
