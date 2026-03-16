@@ -200,6 +200,7 @@ func (m *Manager) Validate() error {
 }
 
 // Reload validates and then reloads Nginx.
+// Falls back to systemctl restart if reload fails (e.g. after upgrade, PID file missing).
 func (m *Manager) Reload() error {
 	if err := m.Validate(); err != nil {
 		return err
@@ -207,7 +208,15 @@ func (m *Manager) Reload() error {
 	cmd := exec.Command("nginx", "-s", "reload")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("nginx reload failed: %s: %w", string(output), err)
+		// PID file missing after upgrade — fall back to systemctl restart
+		m.logger.Warnf("nginx -s reload failed: %s, trying systemctl restart", strings.TrimSpace(string(output)))
+		restartCmd := exec.Command("systemctl", "restart", "nginx")
+		restartOut, restartErr := restartCmd.CombinedOutput()
+		if restartErr != nil {
+			return fmt.Errorf("nginx restart failed: %s: %w", string(restartOut), restartErr)
+		}
+		m.logger.Info("nginx restarted via systemctl")
+		return nil
 	}
 	m.logger.Info("nginx reloaded successfully")
 	return nil
@@ -275,14 +284,31 @@ func NeedUpgrade() bool {
 // UpgradeNginx upgrades Nginx to the latest stable version using the OS package manager.
 func UpgradeNginx() error {
 	// Detect OS and use appropriate upgrade method
+	var err error
 	if fileExistsNginx("/etc/debian_version") {
-		// Debian/Ubuntu: add official nginx repo and upgrade
-		return upgradeNginxDebian()
+		err = upgradeNginxDebian()
+	} else if fileExistsNginx("/etc/redhat-release") || fileExistsNginx("/etc/centos-release") {
+		err = upgradeNginxRHEL()
+	} else {
+		return fmt.Errorf("不支持的操作系统，请手动升级 Nginx 到 1.25.1+")
 	}
-	if fileExistsNginx("/etc/redhat-release") || fileExistsNginx("/etc/centos-release") {
-		return upgradeNginxRHEL()
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("不支持的操作系统，请手动升级 Nginx 到 1.25.1+")
+
+	// Restart nginx after upgrade to pick up new binary and reset PID file
+	restartCmd := exec.Command("systemctl", "restart", "nginx")
+	restartOut, restartErr := restartCmd.CombinedOutput()
+	if restartErr != nil {
+		// Try systemctl start if restart fails
+		startCmd := exec.Command("systemctl", "start", "nginx")
+		startOut, startErr := startCmd.CombinedOutput()
+		if startErr != nil {
+			return fmt.Errorf("Nginx 升级后启动失败: %s: %w", string(startOut), startErr)
+		}
+		_ = restartOut // suppress unused
+	}
+	return nil
 }
 
 func upgradeNginxDebian() error {

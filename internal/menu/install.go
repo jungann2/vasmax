@@ -156,7 +156,21 @@ func (m *InstallMenu) installCombination() {
 		m.config.TLS.Domain = domain
 		certFile, keyFile = config.DetectCertPath(&m.config.TLS)
 		if certFile != "" && keyFile != "" {
-			PrintSuccess(fmt.Sprintf("已自动检测到 TLS 证书: %s", certFile))
+			// 如果证书在 acme.sh 目录中，自动 install-cert 到 VasmaX TLS 目录
+			if strings.Contains(certFile, ".acme.sh") {
+				PrintInfo(fmt.Sprintf("检测到 acme.sh 证书: %s", certFile))
+				PrintInfo("正在安装证书到 VasmaX TLS 目录...")
+				installed, iKey := m.installAcmeCertToTLS(domain)
+				if installed != "" && iKey != "" {
+					certFile = installed
+					keyFile = iKey
+					PrintSuccess(fmt.Sprintf("证书已安装到: %s", certFile))
+				} else {
+					PrintWarning("证书安装失败，将直接使用 acme.sh 源路径")
+				}
+			} else {
+				PrintSuccess(fmt.Sprintf("已自动检测到 TLS 证书: %s", certFile))
+			}
 		} else {
 			// 未自动检测到，提供多种选择
 			PrintWarning("未自动检测到 TLS 证书")
@@ -1440,6 +1454,37 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 	m.config.TLS.Provider = caServer
 
 	PrintSuccess(fmt.Sprintf("证书已申请并安装到 %s", tlsDir))
+	return certPath, keyPath
+}
+
+// installAcmeCertToTLS 将 acme.sh 证书安装到 VasmaX TLS 目录
+func (m *InstallMenu) installAcmeCertToTLS(domain string) (certFile, keyFile string) {
+	acmePath := filepath.Join(os.Getenv("HOME"), ".acme.sh", "acme.sh")
+	if _, err := os.Stat(acmePath); os.IsNotExist(err) {
+		return "", ""
+	}
+
+	tlsDir := config.DefaultTLSDir
+	os.MkdirAll(tlsDir, 0755)
+
+	installArgs := []string{
+		"--install-cert", "-d", domain,
+		"--cert-file", filepath.Join(tlsDir, domain+".crt"),
+		"--key-file", filepath.Join(tlsDir, domain+".key"),
+		"--fullchain-file", filepath.Join(tlsDir, domain+".fullchain.crt"),
+		"--reloadcmd", "systemctl restart VasmaX",
+	}
+	cmd := exec.Command(acmePath, installArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", ""
+	}
+
+	keyPath := filepath.Join(tlsDir, domain+".key")
+	_ = config.EnsureKeyPermissions(keyPath)
+
+	certPath := filepath.Join(tlsDir, domain+".fullchain.crt")
 	return certPath, keyPath
 }
 
