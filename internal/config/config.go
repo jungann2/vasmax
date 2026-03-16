@@ -26,6 +26,7 @@ type Config struct {
 	Lang              string             `yaml:"lang"`
 	Protocols         []string           `yaml:"protocols"`
 	ProtocolModes     map[string]string  `yaml:"protocol_modes"` // 协议安装模式: "domain" 或 "nodomain"
+	ProtocolPorts     map[string]int     `yaml:"protocol_ports"` // 协议自定义端口
 	CoreType          string             `yaml:"core_type"`
 	CDN               CDNConfig          `yaml:"cdn"`
 	Subscription      SubscriptionConfig `yaml:"subscription"`
@@ -166,6 +167,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.ProtocolModes == nil {
 		c.ProtocolModes = make(map[string]string)
+	}
+	if c.ProtocolPorts == nil {
+		c.ProtocolPorts = make(map[string]int)
 	}
 }
 

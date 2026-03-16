@@ -140,12 +140,55 @@ func (m *InstallMenu) installCombination() {
 	// 区分需要 TLS 证书的协议和 Reality 协议
 	var needTLSCert bool
 	var needReality bool
+	// 收集需要用户设置端口的直连协议（非 Nginx 反代）
+	var directProtos []protocol.Protocol
 	for _, p := range selected {
 		if strings.Contains(p.Name(), "reality") {
 			needReality = true
 		} else if p.Name() != "socks5" {
 			needTLSCert = true
 		}
+		// 非 Nginx 反代协议需要用户确认端口
+		if !needsNginxProxy(p) {
+			directProtos = append(directProtos, p)
+		}
+	}
+
+	// 端口设置：Nginx 反代协议自动分配内部端口，直连协议让用户确认/自定义
+	// portOverrides 存储用户自定义的端口（协议名 → 端口）
+	portOverrides := make(map[string]int)
+	if len(directProtos) > 0 {
+		fmt.Println()
+		PrintInfo("以下协议需要独立端口（非 Nginx 反代，客户端直连）:")
+		for _, p := range directProtos {
+			defPort := p.DefaultPort()
+			// Reality 协议端口单独处理
+			if strings.Contains(p.Name(), "reality") {
+				continue
+			}
+			PrintSuccess(fmt.Sprintf("  直接回车选择默认 %d", defPort))
+			input := ReadInput(fmt.Sprintf("%s 端口", p.Name()))
+			if input != "" {
+				var customPort int
+				if _, err := fmt.Sscanf(input, "%d", &customPort); err != nil || customPort < 1 || customPort > 65535 {
+					PrintError(fmt.Sprintf("端口无效，使用默认 %d", defPort))
+				} else {
+					portOverrides[p.Name()] = customPort
+				}
+			}
+		}
+		// Nginx 反代协议提示
+		hasNginxProto := false
+		for _, p := range selected {
+			if needsNginxProxy(p) {
+				hasNginxProto = true
+				break
+			}
+		}
+		if hasNginxProto {
+			PrintInfo("WS/gRPC/HTTPUpgrade 协议通过 Nginx 443 端口反代，无需设置端口")
+		}
+		fmt.Println()
 	}
 
 	// TLS 证书检测与申请
@@ -293,6 +336,16 @@ func (m *InstallMenu) installCombination() {
 		}
 		m.config.ProtocolModes[p.Name()] = "domain"
 
+		// 记录自定义端口
+		if m.config.ProtocolPorts == nil {
+			m.config.ProtocolPorts = make(map[string]int)
+		}
+		if customPort, ok := portOverrides[p.Name()]; ok {
+			m.config.ProtocolPorts[p.Name()] = customPort
+		} else {
+			m.config.ProtocolPorts[p.Name()] = p.DefaultPort()
+		}
+
 		PrintSuccess(fmt.Sprintf("%s 安装完成", p.Name()))
 	}
 
@@ -316,8 +369,13 @@ func (m *InstallMenu) installCombination() {
 	}
 
 	for _, p := range selected {
+		// 使用用户自定义端口或默认端口
+		port := p.DefaultPort()
+		if customPort, ok := portOverrides[p.Name()]; ok {
+			port = customPort
+		}
 		params := &protocol.InboundParams{
-			Port:   p.DefaultPort(),
+			Port:   port,
 			Users:  apiUsers,
 			Tag:    p.Name(),
 			Domain: domain,
@@ -798,7 +856,7 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 
 		info := &protocol.ServerInfo{
 			Host: serverIP,
-			Port: externalPort(p),
+			Port: externalPortWithConfig(p, m.config),
 		}
 
 		// Reality 协议使用 Reality 配置
@@ -999,7 +1057,7 @@ func (m *InstallMenu) showInstalled() {
 		// 构建 ServerInfo
 		info := &protocol.ServerInfo{
 			Host: serverIP,
-			Port: externalPort(p),
+			Port: externalPortWithConfig(p, m.config),
 		}
 
 		// 根据安装模式填充不同字段
@@ -1284,6 +1342,19 @@ func externalPort(p protocol.Protocol) int {
 	return p.DefaultPort()
 }
 
+// externalPortWithConfig 返回协议的外部端口（优先使用配置中的自定义端口）
+func externalPortWithConfig(p protocol.Protocol, cfg *config.Config) int {
+	if needsNginxProxy(p) {
+		return 443
+	}
+	if cfg.ProtocolPorts != nil {
+		if port, ok := cfg.ProtocolPorts[p.Name()]; ok && port > 0 {
+			return port
+		}
+	}
+	return p.DefaultPort()
+}
+
 // defaultWSPath 为协议生成默认的 WS/HTTPUpgrade 路径
 func defaultWSPath(p protocol.Protocol) string {
 	// 每个协议用不同路径避免冲突
@@ -1516,7 +1587,7 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 
 		info := &protocol.ServerInfo{
 			Host: serverIP,
-			Port: externalPort(p),
+			Port: externalPortWithConfig(p, m.config),
 		}
 
 		// 域名模式协议使用域名
