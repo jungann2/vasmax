@@ -453,10 +453,10 @@ func (m *InstallMenu) installCombination() {
 			Domain: protoDomain,
 		}
 
-		// Reality 协议使用 Reality 配置
+		// Reality 协议使用 Reality 配置（端口使用协议自身的默认端口或用户自定义端口）
 		if strings.Contains(p.Name(), "reality") {
 			params.Reality = &m.config.Reality
-			params.Port = m.config.Reality.EffectivePort()
+			// 域名模式下不覆盖端口，使用各协议独立端口避免冲突
 		}
 
 		// 非 Reality、非 socks5 协议使用对应域名的 TLS 证书
@@ -793,15 +793,15 @@ func (m *InstallMenu) installReality() {
 
 	for _, p := range selected {
 		params := &protocol.InboundParams{
-			Port:    m.config.Reality.EffectivePort(),
+			Port:    p.DefaultPort(),
 			Users:   apiUsers,
 			Tag:     p.Name(),
 			Reality: &m.config.Reality,
 		}
 
-		// 非 Reality 协议使用自己的默认端口
+		// 非 Reality 协议不需要 Reality 配置
 		if !strings.Contains(p.Name(), "reality") {
-			params.Port = p.DefaultPort()
+			params.Reality = nil
 		}
 
 		// sing-box TLS 协议使用自签证书
@@ -914,7 +914,6 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 	serverIP := getServerIP()
 
 	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
-	PrintInfo(fmt.Sprintf("端口: %d", m.config.Reality.EffectivePort()))
 	PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
 	PrintInfo(fmt.Sprintf("PublicKey: %s", m.config.Reality.PublicKey))
 	PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
@@ -935,7 +934,6 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 		// Reality 协议使用 Reality 配置
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
-			info.Port = m.config.Reality.EffectivePort()
 		}
 
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
@@ -1159,7 +1157,6 @@ func (m *InstallMenu) showInstalled() {
 		}
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
-			info.Port = m.config.Reality.EffectivePort()
 		}
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
 		if mode == "nodomain" && p.CoreType() == "singbox" {
@@ -1700,7 +1697,6 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 		// Reality 协议使用 Reality 配置
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
-			info.Port = m.config.Reality.EffectivePort()
 		}
 
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain

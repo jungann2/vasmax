@@ -300,7 +300,7 @@ type VlessRealityVision struct{}
 
 func (v *VlessRealityVision) Name() string          { return "vless_reality_vision" }
 func (v *VlessRealityVision) CoreType() string      { return "xray" }
-func (v *VlessRealityVision) DefaultPort() int      { return 443 }
+func (v *VlessRealityVision) DefaultPort() int      { return 31305 }
 func (v *VlessRealityVision) TransportType() string { return "tcp" }
 func (v *VlessRealityVision) IsCDNCompatible() bool { return false }
 
@@ -417,7 +417,7 @@ type VlessRealityGRPC struct{}
 
 func (v *VlessRealityGRPC) Name() string          { return "vless_reality_grpc" }
 func (v *VlessRealityGRPC) CoreType() string      { return "xray" }
-func (v *VlessRealityGRPC) DefaultPort() int      { return 443 }
+func (v *VlessRealityGRPC) DefaultPort() int      { return 31306 }
 func (v *VlessRealityGRPC) TransportType() string { return "grpc" }
 func (v *VlessRealityGRPC) IsCDNCompatible() bool { return false }
 
@@ -541,7 +541,7 @@ type VlessRealityXHTTP struct{}
 
 func (v *VlessRealityXHTTP) Name() string          { return "vless_reality_xhttp" }
 func (v *VlessRealityXHTTP) CoreType() string      { return "xray" }
-func (v *VlessRealityXHTTP) DefaultPort() int      { return 443 }
+func (v *VlessRealityXHTTP) DefaultPort() int      { return 31307 }
 func (v *VlessRealityXHTTP) TransportType() string { return "xhttp" }
 func (v *VlessRealityXHTTP) IsCDNCompatible() bool { return false }
 
