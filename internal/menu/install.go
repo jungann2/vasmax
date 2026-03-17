@@ -470,9 +470,9 @@ func (m *InstallMenu) installCombination() {
 			}
 		}
 
-		// WS/HTTPUpgrade 协议设置路径
+		// WS/HTTPUpgrade/XHTTP 协议设置路径
 		transport := p.TransportType()
-		if transport == "ws" || transport == "httpupgrade" {
+		if transport == "ws" || transport == "httpupgrade" || transport == "xhttp" {
 			params.Path = defaultWSPath(p)
 		}
 		if transport == "grpc" {
@@ -813,6 +813,15 @@ func (m *InstallMenu) installReality() {
 			params.KeyFile = selfKeyFile
 		}
 
+		// XHTTP 协议设置路径
+		transport := p.TransportType()
+		if transport == "xhttp" || transport == "ws" || transport == "httpupgrade" {
+			params.Path = defaultWSPath(p)
+		}
+		if transport == "grpc" {
+			params.ServiceName = defaultGRPCServiceName(p)
+		}
+
 		inboundJSON, err := p.GenerateInbound(params)
 		if err != nil {
 			PrintError(fmt.Sprintf("生成 %s 入站配置失败: %v", p.Name(), err))
@@ -956,9 +965,9 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 			}
 		}
 
-		// WS/HTTPUpgrade/gRPC 路径
+		// WS/HTTPUpgrade/gRPC/XHTTP 路径
 		transport := p.TransportType()
-		if transport == "ws" || transport == "httpupgrade" {
+		if transport == "ws" || transport == "httpupgrade" || transport == "xhttp" {
 			info.Path = defaultWSPath(p)
 		}
 		if transport == "grpc" {
@@ -1166,9 +1175,9 @@ func (m *InstallMenu) showInstalled() {
 			info.Domain = serverIP
 		}
 
-		// WS/HTTPUpgrade/gRPC 路径
+		// WS/HTTPUpgrade/gRPC/XHTTP 路径
 		transport := p.TransportType()
-		if transport == "ws" || transport == "httpupgrade" {
+		if transport == "ws" || transport == "httpupgrade" || transport == "xhttp" {
 			info.Path = defaultWSPath(p)
 		}
 		if transport == "grpc" {
@@ -1460,6 +1469,8 @@ func defaultWSPath(p protocol.Protocol) string {
 		return "/vmessws"
 	case "vmess_httpupgrade_tls":
 		return "/vmesshup"
+	case "vless_reality_xhttp":
+		return "/realityxhttp"
 	default:
 		return "/" + strings.ReplaceAll(p.Name(), "_", "")
 	}
@@ -1472,6 +1483,8 @@ func defaultGRPCServiceName(p protocol.Protocol) string {
 		return "vlessgrpc"
 	case "trojan_grpc_tls":
 		return "trojangrpc"
+	case "vless_reality_grpc":
+		return "realitygrpc"
 	default:
 		return strings.ReplaceAll(p.Name(), "_", "")
 	}
@@ -1707,9 +1720,9 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 			info.Domain = serverIP
 		}
 
-		// WS/HTTPUpgrade/gRPC 路径
+		// WS/HTTPUpgrade/gRPC/XHTTP 路径
 		transport := p.TransportType()
-		if transport == "ws" || transport == "httpupgrade" {
+		if transport == "ws" || transport == "httpupgrade" || transport == "xhttp" {
 			info.Path = defaultWSPath(p)
 		}
 		if transport == "grpc" {
