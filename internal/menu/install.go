@@ -52,6 +52,9 @@ func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Reg
 
 // Show displays the installation management menu.
 func (m *InstallMenu) Show() {
+	// 启动时自动迁移：修正旧版本生成的错误端口配置
+	m.migrateInboundPorts()
+
 	for {
 		PrintTitle("安装管理")
 		PrintOption(1, "任意组合安装（需要域名解析）")
@@ -1948,6 +1951,155 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 				PrintInfo(fmt.Sprintf("  %s → grpc://127.0.0.1:%d/%s", loc.Type, loc.BackendPort, loc.Path))
 			} else {
 				PrintInfo(fmt.Sprintf("  %s → http://127.0.0.1:%d%s", loc.Type, loc.BackendPort, loc.Path))
+			}
+		}
+	}
+}
+
+// migrateInboundPorts 检查并修正旧版本生成的 inbound 配置文件端口
+// 当 DefaultPort 变更后（如 Reality 从 443 改为 31305/31306/31307），
+// 自动更新已有配置文件中的端口，避免端口冲突导致核心无法启动
+func (m *InstallMenu) migrateInboundPorts() {
+	if len(m.config.Protocols) == 0 {
+		return
+	}
+
+	needRestartXray := false
+	needRestartSingBox := false
+	changed := false
+
+	for _, protoName := range m.config.Protocols {
+		p, ok := m.registry.Get(protoName)
+		if !ok {
+			continue
+		}
+
+		// 确定期望端口：优先使用 ProtocolPorts 中的自定义端口，否则用 DefaultPort
+		expectedPort := p.DefaultPort()
+		if m.config.ProtocolPorts != nil {
+			if cp, ok := m.config.ProtocolPorts[protoName]; ok && cp > 0 {
+				expectedPort = cp
+			}
+		}
+
+		// 读取当前 inbound 配置文件
+		var confPath string
+		switch p.CoreType() {
+		case "singbox":
+			confPath = filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("10_%s_inbounds.json", protoName))
+		default:
+			confPath = filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", protoName))
+		}
+
+		data, err := os.ReadFile(confPath)
+		if err != nil {
+			continue // 配置文件不存在，跳过
+		}
+
+		// 解析 JSON 获取当前端口
+		var wrapper struct {
+			Inbounds []json.RawMessage `json:"inbounds"`
+		}
+		if err := json.Unmarshal(data, &wrapper); err != nil || len(wrapper.Inbounds) == 0 {
+			continue
+		}
+
+		var inbound map[string]interface{}
+		if err := json.Unmarshal(wrapper.Inbounds[0], &inbound); err != nil {
+			continue
+		}
+
+		portVal, ok := inbound["port"]
+		if !ok {
+			continue
+		}
+		currentPort := int(portVal.(float64))
+
+		// 检查端口是否需要迁移
+		if currentPort == expectedPort {
+			continue
+		}
+
+		// 特殊处理：如果用户自定义了端口（ProtocolPorts 中有记录且不等于 DefaultPort），
+		// 说明是用户主动设置的，不要覆盖
+		if m.config.ProtocolPorts != nil {
+			if cp, ok := m.config.ProtocolPorts[protoName]; ok && cp > 0 && cp != p.DefaultPort() {
+				// 用户自定义端口，但配置文件端口不匹配 — 修正配置文件
+				inbound["port"] = float64(cp)
+			} else {
+				// 使用新的 DefaultPort
+				inbound["port"] = float64(p.DefaultPort())
+			}
+		} else {
+			inbound["port"] = float64(p.DefaultPort())
+		}
+
+		// 重新序列化并写入
+		newInbound, err := json.Marshal(inbound)
+		if err != nil {
+			continue
+		}
+		newWrapper := map[string]interface{}{
+			"inbounds": []json.RawMessage{newInbound},
+		}
+		if err := security.AtomicWriteJSON(confPath, newWrapper, 0644); err != nil {
+			m.logger.WithError(err).Warnf("迁移 %s 端口失败", protoName)
+			continue
+		}
+
+		newPort := int(inbound["port"].(float64))
+		PrintInfo(fmt.Sprintf("已自动修正 %s 端口: %d → %d", protoName, currentPort, newPort))
+
+		// 更新 ProtocolPorts
+		if m.config.ProtocolPorts == nil {
+			m.config.ProtocolPorts = make(map[string]int)
+		}
+		m.config.ProtocolPorts[protoName] = newPort
+		changed = true
+
+		switch p.CoreType() {
+		case "xray":
+			needRestartXray = true
+		case "singbox":
+			needRestartSingBox = true
+		}
+	}
+
+	if changed {
+		if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+			m.logger.WithError(err).Warn("保存迁移后的配置失败")
+		}
+
+		// 重启受影响的核心
+		if needRestartXray {
+			PrintInfo("正在重启 Xray（端口已修正）...")
+			if err := m.coreMgr.RestartXray(); err != nil {
+				PrintWarning(fmt.Sprintf("重启 Xray 失败: %v", err))
+			} else {
+				time.Sleep(2 * time.Second)
+				status := m.coreMgr.GetStatus()
+				if xs, ok := status["xray"]; ok && xs.Running {
+					PrintSuccess("Xray 运行正常")
+				} else {
+					PrintWarning("Xray 未运行，请检查日志")
+				}
+			}
+		}
+		if needRestartSingBox {
+			PrintInfo("正在重启 sing-box（端口已修正）...")
+			if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
+				m.logger.WithError(err).Warn("合并 sing-box 配置失败")
+			}
+			if err := m.coreMgr.RestartSingBox(); err != nil {
+				PrintWarning(fmt.Sprintf("重启 sing-box 失败: %v", err))
+			} else {
+				time.Sleep(2 * time.Second)
+				status := m.coreMgr.GetStatus()
+				if ss, ok := status["singbox"]; ok && ss.Running {
+					PrintSuccess("sing-box 运行正常")
+				} else {
+					PrintWarning("sing-box 未运行，请检查日志")
+				}
 			}
 		}
 	}
