@@ -14,7 +14,7 @@ var enMessages = map[string]string{
 	"menu.port":      "Extra Port Management",
 	"menu.alpn":      "ALPN Switch",
 	"menu.core":      "Core Management",
-	"menu.xboard":    "Xboard2 Integration",
+	"menu.xboard":    "Xboard-Plus Integration",
 	"menu.tools":     "Other Tools",
 	"menu.exit":      "Exit",
 	"menu.select":    "Please select",
@@ -44,20 +44,20 @@ var enMessages = map[string]string{
 	"account.added":        "User added successfully",
 	"account.deleted":      "User deleted successfully",
 
-	// Xboard2 menu
-	"xboard.title":         "Xboard2 Integration",
+	// Xboard-Plus menu
+	"xboard.title":         "Xboard-Plus Integration",
 	"xboard.enable":        "Enable Integration",
 	"xboard.disable":       "Disable Integration",
 	"xboard.modify":        "Modify Configuration",
 	"xboard.status":        "View Sync Status",
 	"xboard.sync":          "Manual Sync",
 	"xboard.test":          "Test Connection",
-	"xboard.api_prompt":    "Enter Xboard2 API address",
+	"xboard.api_prompt":    "Enter Xboard-Plus API address",
 	"xboard.token_prompt":  "Enter communication token",
 	"xboard.nodeid_prompt": "Enter node ID",
 	"xboard.connected":     "Connection successful",
 	"xboard.conn_failed":   "Connection failed",
-	"xboard.managed_mode":  "[Xboard2 Managed Mode]",
+	"xboard.managed_mode":  "[Xboard-Plus Managed Mode]",
 
 	// Core menu
 	"core.title":       "Core Management",

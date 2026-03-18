@@ -18,6 +18,7 @@ type Config struct {
 	Listen            string             `yaml:"listen"`
 	APIHost           string             `yaml:"api_host"`
 	APIToken          string             `yaml:"api_token"`
+	APIPrefix         string             `yaml:"api_prefix"`
 	NodeID            int                `yaml:"node_id"`
 	NodeType          string             `yaml:"node_type"`
 	TLS               TLSConfig          `yaml:"tls"`

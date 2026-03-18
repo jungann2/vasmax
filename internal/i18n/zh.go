@@ -14,7 +14,7 @@ var zhMessages = map[string]string{
 	"menu.port":      "额外端口管理",
 	"menu.alpn":      "ALPN 切换",
 	"menu.core":      "核心管理",
-	"menu.xboard":    "Xboard2 对接管理",
+	"menu.xboard":    "Xboard-Plus 对接管理",
 	"menu.tools":     "其他工具",
 	"menu.exit":      "退出",
 	"menu.select":    "请选择",
@@ -44,20 +44,20 @@ var zhMessages = map[string]string{
 	"account.added":        "用户添加成功",
 	"account.deleted":      "用户删除成功",
 
-	// Xboard2 menu
-	"xboard.title":         "Xboard2 对接管理",
+	// Xboard-Plus menu
+	"xboard.title":         "Xboard-Plus 对接管理",
 	"xboard.enable":        "启用对接",
 	"xboard.disable":       "禁用对接",
 	"xboard.modify":        "修改配置",
 	"xboard.status":        "查看同步状态",
 	"xboard.sync":          "手动同步",
 	"xboard.test":          "测试连接",
-	"xboard.api_prompt":    "请输入 Xboard2 API 地址",
+	"xboard.api_prompt":    "请输入 Xboard-Plus API 地址",
 	"xboard.token_prompt":  "请输入通信密钥",
 	"xboard.nodeid_prompt": "请输入节点 ID",
 	"xboard.connected":     "连接成功",
 	"xboard.conn_failed":   "连接失败",
-	"xboard.managed_mode":  "[Xboard2 托管模式]",
+	"xboard.managed_mode":  "[Xboard-Plus 托管模式]",
 
 	// Core menu
 	"core.title":       "核心管理",

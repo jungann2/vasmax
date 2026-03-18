@@ -144,6 +144,9 @@ func main() {
 	// 托管模式：启动 SyncLoop
 	if !cfg.Standalone && cfg.APIHost != "" {
 		apiClient := api.NewClient(cfg.APIHost, cfg.APIToken, cfg.NodeID, cfg.NodeType, logger)
+		if cfg.APIPrefix != "" {
+			apiClient.SetAPIPrefix(cfg.APIPrefix)
+		}
 
 		// 确保 Xray Stats API 配置存在（托管模式需要采集流量）
 		if err := protocol.EnsureStatsConfig(cfg.Paths.XrayConf, true); err != nil {
@@ -193,6 +196,9 @@ func main() {
 	// 上报未提交流量
 	if !cfg.Standalone && cfg.APIHost != "" {
 		apiClient := api.NewClient(cfg.APIHost, cfg.APIToken, cfg.NodeID, cfg.NodeType, logger)
+		if cfg.APIPrefix != "" {
+			apiClient.SetAPIPrefix(cfg.APIPrefix)
+		}
 		snapshot := trafficCtr.Snapshot()
 		if len(snapshot) > 0 {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
