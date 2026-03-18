@@ -1,15 +1,35 @@
 # Changelog
 
+## v2.1.0 (2026-03-18)
+
+### Bug Fixes
+- 修复 Reality XHTTP/gRPC 无域名模式缺少 path 和 serviceName 导致连接失败
+- 修复启动时旧版 Reality 端口配置未自动迁移导致冲突
+- 修复 Reality 协议端口冲突导致 Xray 崩溃（各协议使用独立默认端口）
+- 修复端口冲突导致 xray/singbox 无法启动
+- 修复 Nginx reload 失败时无 fallback 处理
+- 修复 Nginx 版本检测与自动升级逻辑
+- 修复 sing-box 配置合并问题
+- 修复 sing-box 旧版 DNS 配置不兼容 1.12+ 版本
+- 修复 acme.sh 使用 example.com 邮箱被拒绝
+- 修复证书申请失败后无法重新选择验证方式
+
+### New Features
+- 多域名支持：每个协议可绑定不同域名，证书按域名去重检测/申请
+- 域名模式安装支持自定义端口
+- 智能证书检测 + acme.sh exit code 2 处理
+- 证书验证方式选择前预检 80 端口状态
+- AnyTLS 加推荐标签并调整为有域名安装首选
+
 ## v1.0.0 (2026-01-10)
 
 ### Bug Fixes
 - 修复 Alpine OpenRC 兼容性问题
 - 修复菜单卸载选项未清理 systemd service
-- 修复 CentOS/RHEL 依赖安装失败
 
 ### New Features
 - 正式支持 Alpine Linux（OpenRC）
-- 新增完整卸载功能（含 Xray/sing-box/BBR 配置清理）
+- 新增完整卸载功能
 - 新增 BBR 加速管理（32 项功能）
 
 ## v0.3.2 (2025-12-05)
