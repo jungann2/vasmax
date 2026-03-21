@@ -238,3 +238,102 @@ vasmax
 ## 许可证
 
 本项目基于 [AGPL-3.0](LICENSE) 许可证开源。
+
+---
+
+# English
+
+<div align="center">
+
+⚡ 15-in-1 Xray-core / sing-box management script (Go rewrite)
+
+</div>
+
+---
+
+## 🔗 Companion Project
+
+| Project | Description |
+|---------|-------------|
+| [🛡️ Xboard-Plus](https://github.com/jungann2/Xboard-Plus) | High-performance panel system built on Laravel 11 + Octane, all-in-one user management, subscription distribution, and traffic statistics |
+
+> 💡 **VasmaX + Xboard-Plus work best together.** VasmaX handles node deployment, protocol configuration, and certificate management. Xboard-Plus handles user management, subscription distribution, and traffic statistics. Together they enable: automatic user sync, real-time traffic stats, auto-disable on expiry, and centralized multi-node management. One solution from personal use to multi-user operations.
+
+---
+
+## 📖 Introduction
+
+VasmaX (V2ray Agent Service Management Assistant X) is a multi-protocol proxy service management tool rewritten in Go, supporting Xray-core and sing-box dual-core with 15 protocol combinations for one-click installation and management.
+
+Supports standalone mode and Xboard-Plus panel managed mode.
+
+## Supported Protocols (15-in-1)
+
+**Xray-core:**
+- VLESS+TCP+TLS+Vision
+- VLESS+WS+TLS
+- VLESS+gRPC+TLS
+- VLESS+Reality+Vision
+- VLESS+Reality+gRPC
+- VLESS+Reality+XHTTP
+- VMess+WS+TLS
+- VMess+HTTPUpgrade+TLS
+- Trojan+TCP+TLS
+- Trojan+gRPC+TLS
+
+**sing-box:**
+- Hysteria2
+- Tuic
+- NaiveProxy
+- AnyTLS
+- Socks5
+
+## Quick Install
+
+### Step 1: Update system and install dependencies
+
+As root:
+```bash
+apt update -y && apt install -y curl socat wget
+```
+
+Non-root:
+```bash
+sudo apt update -y && sudo apt install -y curl socat wget
+```
+
+### Step 2: Run the install script
+
+```bash
+wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/jungann2/vasmax/main/install.sh" && chmod 700 /root/install.sh && /root/install.sh
+```
+
+### Usage
+
+After installation, type the following command to open the management menu:
+
+```bash
+vasmax
+```
+
+## Operating Modes
+
+### Standalone Mode
+
+Manage protocols and users directly on the server without a panel. Ideal for personal use.
+
+### Xboard-Plus Managed Mode
+
+Connect to Xboard-Plus panel for multi-user management, traffic statistics, auto-disable on expiry, and more. Ideal for service operations.
+
+## System Requirements
+
+- Recommended: Debian 12 (Bookworm), Ubuntu 22.04+
+- Compatible: Ubuntu 16+ / Debian 8+ / CentOS 7+ / Alpine
+- Architecture: amd64 / arm64
+- Memory: ≥ 128MB
+- Root access required
+
+## License
+
+This project is licensed under [AGPL-3.0](LICENSE).
