@@ -69,7 +69,10 @@ func (v *VMessWSTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 		"tls":  "tls",
 		"sni":  info.Domain,
 	}
-	data, _ := json.Marshal(vmessJSON)
+	data, err := json.Marshal(vmessJSON)
+	if err != nil {
+		return ""
+	}
 	return "vmess://" + base64.StdEncoding.EncodeToString(data)
 }
 
@@ -182,7 +185,10 @@ func (v *VMessHTTPUpgradeTLS) GenerateURI(user *api.User, info *ServerInfo) stri
 		"tls":  "tls",
 		"sni":  info.Domain,
 	}
-	data, _ := json.Marshal(vmessJSON)
+	data, err := json.Marshal(vmessJSON)
+	if err != nil {
+		return ""
+	}
 	return "vmess://" + base64.StdEncoding.EncodeToString(data)
 }
 

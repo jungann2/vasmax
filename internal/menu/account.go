@@ -26,9 +26,10 @@ func (m *AccountMenu) Show() {
 		PrintOption(1, "添加用户")
 		PrintOption(2, "删除用户")
 		PrintOption(3, "查看用户")
+		PrintOption(4, "编辑用户（速率/设备限制）")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4"})
 		switch choice {
 		case "1":
 			m.addUser()
@@ -36,6 +37,8 @@ func (m *AccountMenu) Show() {
 			m.removeUser()
 		case "3":
 			m.listUsers()
+		case "4":
+			m.editUser()
 		case "0":
 			return
 		}
@@ -141,6 +144,93 @@ func (m *AccountMenu) listUsers() {
 		}
 		PrintOption(i+1, fmt.Sprintf("%-20s UUID: %s  速率: %s  设备: %s",
 			u.Email, u.UUID, speedInfo, deviceInfo))
+	}
+}
+
+func (m *AccountMenu) editUser() {
+	PrintTitle("编辑用户（速率/设备限制）")
+
+	users := m.userMgr.GetAllUsers()
+	if len(users) == 0 {
+		PrintInfo("暂无用户")
+		return
+	}
+
+	for i, u := range users {
+		speedInfo := "不限"
+		if u.SpeedLimit > 0 {
+			speedInfo = fmt.Sprintf("%d Mbps", u.SpeedLimit)
+		}
+		deviceInfo := "不限"
+		if u.DeviceLimit > 0 {
+			deviceInfo = fmt.Sprintf("%d 台", u.DeviceLimit)
+		}
+		PrintOption(i+1, fmt.Sprintf("%-20s 速率: %-12s 设备: %s", u.Email, speedInfo, deviceInfo))
+	}
+	PrintOptionStr("0", "返回")
+
+	input := ReadInput("请输入要编辑的用户编号")
+	if input == "" || input == "0" {
+		return
+	}
+	var idx int
+	if _, err := fmt.Sscanf(input, "%d", &idx); err != nil || idx < 1 || idx > len(users) {
+		PrintError("无效编号")
+		return
+	}
+
+	target := users[idx-1]
+	PrintInfo(fmt.Sprintf("正在编辑用户: %s", target.Email))
+	PrintSeparator()
+
+	// 速率限制
+	PrintInfo("速率限制（单位：Mbps，即兆比特每秒）")
+	PrintInfo("  例如：10 = 10 Mbps，100 = 100 Mbps，1000 = 1 Gbps")
+	PrintSuccess("  输入 0 或直接回车 = 不限速")
+	speedStr := ReadInput("请输入速率限制 (Mbps)")
+	speedLimit := 0
+	if speedStr != "" && speedStr != "0" {
+		if _, err := fmt.Sscanf(speedStr, "%d", &speedLimit); err != nil || speedLimit < 0 {
+			PrintError("无效数值，速率限制已设为不限")
+			speedLimit = 0
+		}
+	}
+
+	// 设备数限制
+	PrintInfo("同时在线设备数限制")
+	PrintSuccess("  输入 0 或直接回车 = 不限设备数")
+	deviceStr := ReadInput("请输入设备数限制")
+	deviceLimit := 0
+	if deviceStr != "" && deviceStr != "0" {
+		if _, err := fmt.Sscanf(deviceStr, "%d", &deviceLimit); err != nil || deviceLimit < 0 {
+			PrintError("无效数值，设备数限制已设为不限")
+			deviceLimit = 0
+		}
+	}
+
+	// 显示确认信息
+	newSpeed := "不限"
+	if speedLimit > 0 {
+		newSpeed = fmt.Sprintf("%d Mbps", speedLimit)
+	}
+	newDevice := "不限"
+	if deviceLimit > 0 {
+		newDevice = fmt.Sprintf("%d 台", deviceLimit)
+	}
+	PrintInfo(fmt.Sprintf("即将设置 → 速率: %s  设备: %s", newSpeed, newDevice))
+
+	if err := m.userMgr.UpdateLocalUser(target.UUID, speedLimit, deviceLimit); err != nil {
+		PrintError(fmt.Sprintf("更新失败: %v", err))
+		return
+	}
+
+	PrintSuccess(fmt.Sprintf("用户 %s 已更新", target.Email))
+
+	// 重新生成订阅（限速信息写入配置）
+	if m.subMgr != nil {
+		if err := m.subMgr.GenerateAll(); err != nil {
+			PrintWarning(fmt.Sprintf("重新生成订阅失败: %v", err))
+		}
 	}
 }
 

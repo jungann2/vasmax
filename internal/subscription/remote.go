@@ -15,9 +15,8 @@ import (
 
 // RemoteSubscription 远程订阅配置
 type RemoteSubscription struct {
-	Domain string
-	Port   int
-	Alias  string
+	URL   string // 完整订阅 URL（default 格式，Base64 URI 列表）
+	Alias string // 节点别名后缀
 }
 
 const (
@@ -25,42 +24,42 @@ const (
 	RemoteSubFilePath = "subscribe_remote/remoteSubscribeUrl"
 )
 
-// ParseRemoteSubscription 解析远程订阅输入（格式：域名:端口:别名）
+// ParseRemoteSubscription 解析远程订阅输入（格式：URL:别名）
+// URL 必须以 http:// 或 https:// 开头，别名不能为空
+// 示例: https://hk.example.com/s/abc123/default:香港
 func ParseRemoteSubscription(input string) (*RemoteSubscription, error) {
-	parts := strings.SplitN(input, ":", 3)
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid format, expected domain:port:alias")
+	// 从末尾找最后一个冒号作为 URL 和别名的分隔符
+	// 因为 URL 本身含冒号（https://），所以从右往左找
+	lastColon := strings.LastIndex(input, ":")
+	if lastColon < 0 {
+		return nil, fmt.Errorf("格式错误，应为 URL:别名，例如 https://example.com/s/hash/default:香港")
 	}
-	domain := parts[0]
-	if err := security.ValidateDomain(domain); err != nil {
-		return nil, fmt.Errorf("invalid domain: %w", err)
+	rawURL := strings.TrimSpace(input[:lastColon])
+	alias := strings.TrimSpace(input[lastColon+1:])
+
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return nil, fmt.Errorf("URL 必须以 http:// 或 https:// 开头")
 	}
-	port := 0
-	if _, err := fmt.Sscanf(parts[1], "%d", &port); err != nil || port < 1 || port > 65535 {
-		return nil, fmt.Errorf("invalid port: %s", parts[1])
-	}
-	alias := parts[2]
 	if alias == "" {
-		return nil, fmt.Errorf("alias cannot be empty")
+		return nil, fmt.Errorf("别名不能为空")
 	}
-	return &RemoteSubscription{Domain: domain, Port: port, Alias: alias}, nil
+	return &RemoteSubscription{URL: rawURL, Alias: alias}, nil
 }
 
-// FetchRemote 获取远程订阅内容
-func FetchRemote(sub *RemoteSubscription, format string) ([]byte, error) {
-	url := fmt.Sprintf("https://%s:%d/s/%s/", sub.Domain, sub.Port, format)
+// FetchRemote 获取远程订阅内容（直接请求完整 URL）
+func FetchRemote(sub *RemoteSubscription) ([]byte, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(sub.URL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch remote subscription from %s: %w", sub.Domain, err)
+		return nil, fmt.Errorf("请求远程订阅失败 %s: %w", sub.URL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote subscription %s returned status %d", sub.Domain, resp.StatusCode)
+		return nil, fmt.Errorf("远程订阅返回状态码 %d: %s", resp.StatusCode, sub.URL)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read remote subscription body: %w", err)
+		return nil, fmt.Errorf("读取远程订阅内容失败: %w", err)
 	}
 	return data, nil
 }
@@ -140,7 +139,7 @@ func SaveRemoteSubscriptions(baseDir string, subs []RemoteSubscription) error {
 	}
 	var lines []string
 	for _, sub := range subs {
-		lines = append(lines, fmt.Sprintf("%s:%d:%s", sub.Domain, sub.Port, sub.Alias))
+		lines = append(lines, fmt.Sprintf("%s:%s", sub.URL, sub.Alias))
 	}
 	return security.AtomicWrite(path, []byte(strings.Join(lines, "\n")), 0600)
 }

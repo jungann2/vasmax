@@ -112,7 +112,8 @@ func generateSubscribeLocation() string {
 	var b strings.Builder
 	b.WriteString("    # --- BEGIN SUBSCRIBE ---\n")
 	b.WriteString("    location /s/ {\n")
-	b.WriteString("        alias /etc/vasmax/subscribe/;\n")
+	b.WriteString("        root /etc/vasmax/subscribe;\n")
+	b.WriteString("        rewrite ^/s/(.*)$ /$1 break;\n")
 	b.WriteString("        default_type 'text/plain; charset=utf-8';\n")
 	b.WriteString("        add_header Cache-Control no-cache;\n")
 	b.WriteString("    }\n")

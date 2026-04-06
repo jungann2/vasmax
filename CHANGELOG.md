@@ -1,6 +1,30 @@
 # Changelog
 
-## v2.1.0 (2026-03-18)
+## v2.2.0 (2026-04-07)
+
+### Bug Fixes (Critical)
+- 修复订阅链接端口全部硬编码为 443，导致 Hysteria2/TUIC 等非 443 协议订阅链接错误
+- 修复订阅链接 WS 路径/gRPC serviceName 硬编码为 `/vasmax`，客户端无法连接
+- 修复无域名模式（Reality）订阅链接地址为空
+- 修复 `showLinks()` 使用空 salt 生成 hash，与磁盘文件目录不匹配导致订阅 404
+- 修复 Xray Stats 缺少用户级流量统计配置（`statsUserUplink/Downlink`），导致流量监控和托管模式流量上报全部为零
+- 修复整个项目因三个旧版残留文件（`protocol.go`/`api.go`/`sysinfo.go`）重复声明导致无法编译
+- 修复回滚快照不记录运行中的服务，回滚后核心不会重启
+- 修复 `statEntry.Value` 类型错误（定义为 string 但 Xray 返回 int），监控菜单流量数据解析失败
+- 修复远程订阅 URL 拼接错误（缺少用户 hash），远程订阅功能完全不可用
+- 修复核心安装解压时 `defer close` 在循环内，文件关闭错误被静默丢弃
+- 修复端口管理菜单编号冲突，已有端口列表与操作选项编号重叠导致无法正常操作
+- 修复 VMess URI 生成忽略 `json.Marshal` 错误
+- 修复节点类型验证缺少 `hysteria2`/`naive`，托管模式配置校验误报
+
+### New Features
+- 账号管理新增「编辑用户」：支持设置速率限制（Mbps）和设备数限制（独立模式）
+- 远程订阅格式改为完整 URL（`https://域名/s/hash/default:别名`），实际可用
+- 订阅管理新增操作说明，提示何时需要重新生成订阅
+- 其他工具菜单「伪装站管理」添加说明，区分与 Reality 伪装域名的区别
+- CDN 管理从「其他工具」移除重复入口，统一在主菜单 8
+
+
 
 ### Bug Fixes
 - 修复 Reality XHTTP/gRPC 无域名模式缺少 path 和 serviceName 导致连接失败

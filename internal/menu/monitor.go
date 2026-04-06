@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -88,20 +87,19 @@ func (m *MonitorMenu) ensureStatsAPI() bool {
 }
 
 // statEntry Xray Stats API 返回的统计条目
-// Xray 输出 value 为字符串类型（如 "1176"）
+// Xray 输出 value 字段为整数类型
 type statEntry struct {
 	Name  string `json:"name"`
-	Value string `json:"value"`
+	Value int64  `json:"value"`
 }
 
 type statsResponse struct {
 	Stat []statEntry `json:"stat"`
 }
 
-// statValue 将字符串 value 转为 int64
+// statValue 返回条目的流量值
 func statValue(s statEntry) int64 {
-	v, _ := strconv.ParseInt(s.Value, 10, 64)
-	return v
+	return s.Value
 }
 
 func (m *MonitorMenu) queryStats(pattern string) ([]statEntry, error) {

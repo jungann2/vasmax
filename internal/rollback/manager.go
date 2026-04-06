@@ -75,7 +75,12 @@ func (m *Manager) CreateSnapshot() (*Snapshot, error) {
 		}
 	}
 
-	// 保存快照元数据
+	// 记录需要恢复的服务
+	for _, svc := range []string{"xray", "sing-box"} {
+		if exec.Command("systemctl", "is-active", "--quiet", svc).Run() == nil {
+			snap.Services = append(snap.Services, svc)
+		}
+	}
 	snapFile := filepath.Join(m.snapshotDir, "snapshot.json")
 	if err := security.AtomicWriteJSON(snapFile, snap, 0644); err != nil {
 		return nil, fmt.Errorf("保存快照元数据失败: %w", err)

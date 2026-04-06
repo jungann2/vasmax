@@ -33,21 +33,18 @@ func (m *ToolsMenu) ShowCDNMenu() {
 func (m *ToolsMenu) Show() {
 	for {
 		PrintTitle("其他工具")
-		PrintOption(1, "CDN 管理")
-		PrintOption(2, "伪装站管理")
-		PrintOption(3, "健康检查")
-		PrintOption(4, fmt.Sprintf("BBR 加速管理（当前: %s）", bbrStatus()))
+		PrintOption(1, "Nginx 伪装站管理（部署假网页防止代理特征识别）")
+		PrintOption(2, "健康检查")
+		PrintOption(3, fmt.Sprintf("BBR 加速管理（当前: %s）", bbrStatus()))
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3"})
 		switch choice {
 		case "1":
-			m.cdnMenu()
-		case "2":
 			m.fakeSiteMenu()
-		case "3":
+		case "2":
 			m.healthCheck()
-		case "4":
+		case "3":
 			m.bbrMenu()
 		case "0":
 			return
@@ -106,9 +103,13 @@ func (m *ToolsMenu) cdnMenu() {
 }
 
 func (m *ToolsMenu) fakeSiteMenu() {
-	PrintTitle("伪装站管理")
-	PrintOption(1, "部署预设模板")
-	PrintOption(2, "自定义模板 URL")
+	PrintTitle("Nginx 伪装站管理")
+	PrintInfo("通过 Nginx 在 80/443 端口部署一个真实网页，")
+	PrintInfo("使服务器对外看起来像普通网站，防止被识别为代理服务器。")
+	PrintInfo("与 Reality 伪装域名无关，Reality 无需配置此项。")
+	PrintSeparator()
+	PrintOption(1, "部署预设模板（从远程下载 HTML 模板）")
+	PrintOption(2, "自定义模板 URL（指定任意 HTML 模板地址）")
 	PrintOptionStr("0", "返回")
 
 	choice := ReadChoice("请选择", []string{"1", "2"})

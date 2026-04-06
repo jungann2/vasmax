@@ -207,6 +207,53 @@ func (m *Manager) AddLocalUser(uuid, email string) error {
 	return m.saveLocalUsers()
 }
 
+// UpdateLocalUser 更新本地用户的速率/设备限制（独立模式）
+// speedLimit: Mbps，0 表示不限；deviceLimit: 设备数，0 表示不限
+func (m *Manager) UpdateLocalUser(uuid string, speedLimit, deviceLimit int) error {
+	old := m.users.Load().(*UserTable)
+	entry, exists := old.byUUID[uuid]
+	if !exists {
+		return fmt.Errorf("用户不存在: %s", uuid)
+	}
+	if entry.ID >= 0 {
+		return fmt.Errorf("托管模式用户不可在本地编辑")
+	}
+
+	// 构建新表（copy-on-write）
+	table := &UserTable{
+		byID:    make(map[int]*UserEntry, len(old.byID)),
+		byUUID:  make(map[string]*UserEntry, len(old.byUUID)),
+		entries: make([]*UserEntry, 0, len(old.entries)),
+	}
+	for k, v := range old.byID {
+		table.byID[k] = v
+	}
+	for k, v := range old.byUUID {
+		table.byUUID[k] = v
+	}
+	table.entries = append(table.entries, old.entries...)
+
+	// 更新目标用户（替换指针）
+	updated := &UserEntry{
+		ID:          entry.ID,
+		UUID:        entry.UUID,
+		Email:       entry.Email,
+		SpeedLimit:  speedLimit,
+		DeviceLimit: deviceLimit,
+	}
+	table.byID[updated.ID] = updated
+	table.byUUID[updated.UUID] = updated
+	for i, e := range table.entries {
+		if e.UUID == uuid {
+			table.entries[i] = updated
+			break
+		}
+	}
+
+	m.users.Store(table)
+	return m.saveLocalUsers()
+}
+
 // RemoveLocalUser 删除本地用户（独立模式）
 func (m *Manager) RemoveLocalUser(uuid string) error {
 	old := m.users.Load().(*UserTable)

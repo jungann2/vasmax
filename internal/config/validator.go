@@ -87,10 +87,11 @@ func (c *Config) Validate() error {
 		validNodeTypes := map[string]bool{
 			"v2ray": true, "vmess": true, "vless": true,
 			"trojan": true, "shadowsocks": true,
-			"hysteria": true, "tuic": true, "anytls": true,
+			"hysteria": true, "hysteria2": true,
+			"tuic": true, "anytls": true, "naive": true,
 		}
 		if !validNodeTypes[c.NodeType] {
-			errs = append(errs, fmt.Sprintf("node_type: must be one of v2ray/vmess/vless/trojan/shadowsocks/hysteria/tuic, got %q", c.NodeType))
+			errs = append(errs, fmt.Sprintf("node_type: must be one of v2ray/vmess/vless/trojan/shadowsocks/hysteria/hysteria2/tuic/anytls/naive, got %q", c.NodeType))
 		}
 	}
 

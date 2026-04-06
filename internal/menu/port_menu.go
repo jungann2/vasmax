@@ -29,12 +29,13 @@ func (m *PortMenu) Show() {
 		if len(ports) == 0 {
 			PrintInfo("暂无额外开放端口")
 		} else {
-			for i, p := range ports {
+			PrintInfo("已开放端口:")
+			for _, p := range ports {
 				note := p.Note
 				if note == "" {
 					note = "-"
 				}
-				PrintOption(i+1, fmt.Sprintf("%-6d  %-5s  %s", p.Port, p.Protocol, note))
+				PrintInfo(fmt.Sprintf("  %-6d  %-5s  %s", p.Port, p.Protocol, note))
 			}
 		}
 		PrintSeparator()

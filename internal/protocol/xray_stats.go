@@ -58,9 +58,17 @@ func GenerateStatsModuleConfig(confDir string) error {
 	statsConfig := map[string]interface{}{
 		"stats": map[string]interface{}{},
 		"policy": map[string]interface{}{
+			"levels": map[string]interface{}{
+				"0": map[string]interface{}{
+					"statsUserUplink":   true,
+					"statsUserDownlink": true,
+				},
+			},
 			"system": map[string]interface{}{
-				"statsInboundUplink":   true,
-				"statsInboundDownlink": true,
+				"statsInboundUplink":    true,
+				"statsInboundDownlink":  true,
+				"statsOutboundUplink":   true,
+				"statsOutboundDownlink": true,
 			},
 		},
 	}

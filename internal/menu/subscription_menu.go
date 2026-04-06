@@ -38,6 +38,12 @@ func (m *SubscriptionMenu) Show() {
 			PrintWarning("未配置订阅域名")
 		}
 		PrintSeparator()
+		PrintInfo("订阅文件为静态生成，以下情况需手动执行「重新生成订阅」:")
+		PrintInfo("  · 新增/删除用户后")
+		PrintInfo("  · 安装/卸载协议后")
+		PrintInfo("  · 修改域名、证书、CDN、Reality 配置后")
+		PrintInfo("  · 添加/删除远程订阅后")
+		PrintSeparator()
 		PrintOption(1, "查看订阅链接")
 		PrintOption(2, "重新生成订阅")
 		PrintOption(3, "设置订阅域名")
@@ -77,13 +83,20 @@ func (m *SubscriptionMenu) showLinks() {
 		return
 	}
 
+	// 使用与 Manager 相同的 salt 逻辑：优先配置文件，否则从文件读取
+	salt := m.config.Subscription.Salt
+	if salt == "" {
+		if s, err := subscription.LoadOrCreateSalt("/etc/vasmax"); err == nil {
+			salt = s
+		}
+	}
+
 	for _, u := range users {
-		emailMd5 := subscription.GenerateSubscribePath(u.Email, m.config.Subscription.Salt)
-		base := fmt.Sprintf("https://%s/s/%s", subDomain, emailMd5)
+		emailMd5 := subscription.GenerateSubscribePath(u.Email, salt)
 		PrintInfo(fmt.Sprintf("用户: %s", u.Email))
-		PrintInfo(fmt.Sprintf("  通用:    %s/default", base))
-		PrintInfo(fmt.Sprintf("  Clash:   %s/clash", base))
-		PrintInfo(fmt.Sprintf("  SingBox: %s/singbox", base))
+		PrintInfo(fmt.Sprintf("  通用(v2ray/clash):  https://%s/s/%s/default", subDomain, emailMd5))
+		PrintInfo(fmt.Sprintf("  Clash:              https://%s/s/%s/clash", subDomain, emailMd5))
+		PrintInfo(fmt.Sprintf("  SingBox:            https://%s/s/%s/singbox", subDomain, emailMd5))
 		fmt.Println()
 	}
 }
@@ -117,12 +130,15 @@ func (m *SubscriptionMenu) remoteSubMenu() {
 	baseDir := filepath.Dir(m.config.Paths.Subscribe)
 	for {
 		PrintTitle("远程订阅管理")
+		PrintInfo("将其他 VasmaX 服务器（或任意 Base64 订阅链接）合并到本机订阅中")
+		PrintInfo("用户拉取订阅时，远程节点会自动追加到本机节点后面")
+		PrintSeparator()
 		subs, _ := subscription.LoadRemoteSubscriptions(baseDir)
 		if len(subs) == 0 {
 			PrintInfo("暂无远程订阅")
 		} else {
 			for i, s := range subs {
-				PrintOption(i+1, fmt.Sprintf("%-20s  %s:%d", s.Alias, s.Domain, s.Port))
+				PrintOption(i+1, fmt.Sprintf("[%s]  %s", s.Alias, s.URL))
 			}
 		}
 		PrintSeparator()
@@ -139,7 +155,10 @@ func (m *SubscriptionMenu) remoteSubMenu() {
 		case choice == "0":
 			return
 		case choice == fmt.Sprintf("%d", len(subs)+1):
-			input := ReadInput("请输入格式: 域名:端口:别名")
+			PrintInfo("请输入格式: 完整订阅URL:别名")
+			PrintInfo("示例: https://hk.example.com/s/abc123def456/default:香港节点")
+			PrintInfo("说明: URL 为对方 VasmaX 的 default 订阅链接（Base64 格式），别名用于区分节点来源")
+			input := ReadInput("请输入")
 			if input == "" {
 				continue
 			}
@@ -152,7 +171,7 @@ func (m *SubscriptionMenu) remoteSubMenu() {
 			if err := subscription.SaveRemoteSubscriptions(baseDir, subs); err != nil {
 				PrintError(fmt.Sprintf("保存失败: %v", err))
 			} else {
-				PrintSuccess(fmt.Sprintf("已添加: %s", sub.Alias))
+				PrintSuccess(fmt.Sprintf("已添加: [%s] %s", sub.Alias, sub.URL))
 			}
 		case choice == fmt.Sprintf("%d", len(subs)+2):
 			if len(subs) == 0 {

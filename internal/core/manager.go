@@ -408,7 +408,6 @@ func extractFromZip(zipPath, targetName, destPath string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		// 匹配文件名（可能在子目录中）
 		name := filepath.Base(f.Name)
 		if name != targetName {
 			continue
@@ -418,17 +417,23 @@ func extractFromZip(zipPath, targetName, destPath string) error {
 		if err != nil {
 			return fmt.Errorf("读取 zip 条目失败: %w", err)
 		}
-		defer rc.Close()
 
 		os.MkdirAll(filepath.Dir(destPath), 0755)
 		out, err := os.Create(destPath)
 		if err != nil {
+			rc.Close()
 			return fmt.Errorf("创建目标文件失败: %w", err)
 		}
-		defer out.Close()
 
-		if _, err := io.Copy(out, rc); err != nil {
-			return fmt.Errorf("写入目标文件失败: %w", err)
+		_, copyErr := io.Copy(out, rc)
+		rc.Close()
+		closeErr := out.Close()
+
+		if copyErr != nil {
+			return fmt.Errorf("写入目标文件失败: %w", copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("关闭目标文件失败: %w", closeErr)
 		}
 		return nil
 	}
@@ -470,10 +475,15 @@ func extractFromTarGz(tgzPath, targetName, destPath string) error {
 		if err != nil {
 			return fmt.Errorf("创建目标文件失败: %w", err)
 		}
-		defer out.Close()
 
-		if _, err := io.Copy(out, tr); err != nil {
-			return fmt.Errorf("写入目标文件失败: %w", err)
+		_, copyErr := io.Copy(out, tr)
+		closeErr := out.Close()
+
+		if copyErr != nil {
+			return fmt.Errorf("写入目标文件失败: %w", copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("关闭目标文件失败: %w", closeErr)
 		}
 		return nil
 	}
