@@ -1,4 +1,4 @@
-# VasmaX
+# vasmax
 
 <div align="center">
 
@@ -17,13 +17,13 @@
 |------|------|
 | [🛡️ Xboard-Plus](https://github.com/jungann2/Xboard-Plus) | 基于 Laravel 11 + Octane 的高性能面板系统，用户管理、订阅分发、流量统计一站式解决 |
 
-> 💡 **VasmaX + Xboard-Plus 搭配使用，效果极佳。** VasmaX 负责节点部署、协议配置、证书管理，Xboard-Plus 负责用户管理、订阅分发、流量统计。两者对接后可实现：用户自动同步、流量实时统计、到期自动停用、多节点集中管理。从单机自用到多用户运营，一套方案全搞定。
+> 💡 **vasmax + Xboard-Plus 搭配使用，效果极佳。** VasmaX 负责节点部署、协议配置、证书管理，Xboard-Plus 负责用户管理、订阅分发、流量统计。两者对接后可实现：用户自动同步、流量实时统计、到期自动停用、多节点集中管理。从单机自用到多用户运营，一套方案全搞定。
 
 ---
 
 ## 📖 简介
 
-VasmaX（V2ray Agent Service Management Assistant X）是一个基于 Go 语言重构的多协议代理服务管理工具，支持 Xray-core 和 sing-box 双核心，提供 15 种协议组合的一键安装与管理。
+vasmax（V2ray Agent Service Management Assistant X）是一个基于 Go 语言重构的多协议代理服务管理工具，支持 Xray-core 和 sing-box 双核心，提供 15 种协议组合的一键安装与管理。
 相比S-UI、3x-ui，核心极大的优化，面板更轻便，管理更容易，消除web面板的网络安全隐患问题。
 支持独立运行和 Xboard-Plus 面板托管两种模式。
 
