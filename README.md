@@ -230,7 +230,6 @@ vasmax
 
 本项目参考了以下开源项目，感谢原作者的贡献：
 
-- [v2ray-agent](https://github.com/mack-a/v2ray-agent) - 原版八合一脚本
 - [anytls-go](https://github.com/anytls/anytls-go) - AnyTLS 协议实现
 - [Xray-core](https://github.com/XTLS/Xray-core) - VLESS/VMess/Trojan 核心
 - [sing-box](https://github.com/SagerNet/sing-box) - Hysteria2/Tuic/Naive/AnyTLS 核心
