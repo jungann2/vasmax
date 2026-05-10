@@ -24,7 +24,7 @@
 ## 📖 简介
 
 VasmaX（V2ray Agent Service Management Assistant X）是一个基于 Go 语言重构的多协议代理服务管理工具，支持 Xray-core 和 sing-box 双核心，提供 15 种协议组合的一键安装与管理。
-
+相比S-UI、3x-ui，核心极大的优化，面板更轻便，管理更容易，消除web面板的网络安全隐患问题。
 支持独立运行和 Xboard-Plus 面板托管两种模式。
 
 ## 支持协议（十五合一）
