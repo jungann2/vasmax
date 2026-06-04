@@ -2,10 +2,10 @@
 
 <div align="center">
 
-⚡ Xray-core / sing-box 十五合一管理脚本（Go 重构版）特别提醒：该脚本仅用于技术交流，禁止用商业用途
+⚡ Xray-core / sing-box 十五合一管理脚本（Go 重构版）
 ⚠️ 法律免责声明 / Legal Disclaimer
 
-本项目提供的 VLESS / VMess / AnyTLS 配置脚本及代码 仅供网络安全技术研究与学习交流使用。
+本项目提供的 VLESS / VMess / AnyTLS 配置脚本及代码 仅供网络安全技术研究与学习交流、商业用途使用。
 
 🚫 严禁将本工具用于任何商业牟利、私自搭建跨境代理节点进行售卖或提供非法访问服务。
 
