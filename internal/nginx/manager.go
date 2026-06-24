@@ -115,6 +115,27 @@ func (m *Manager) AddLocation(domain, protocol, path string, backendPort int) er
 
 // RemoveLocation removes a location block for a protocol from the domain config.
 func (m *Manager) RemoveLocation(domain, protocol string) error {
+	return m.removeLocationByTags(domain, protocol, nil)
+}
+
+// RemoveLocationByPath removes a location block by its protocol transport and path.
+// It also understands legacy configs whose markers only used the transport name
+// (for example BEGIN WS), matching the block body by path before removal.
+func (m *Manager) RemoveLocationByPath(domain, protocolType, path string) error {
+	matchPath := func(block string) bool {
+		return strings.Contains(block, "location "+path+" ") ||
+			strings.Contains(block, "location "+path+"{") ||
+			strings.Contains(block, "location ^~ /"+strings.TrimPrefix(path, "/")+" ")
+	}
+
+	tags := []string{
+		locationTag(protocolType, path),
+		strings.ToUpper(strings.ReplaceAll(protocolType, "/", "_")), // legacy marker
+	}
+	return m.removeLocationByTags(domain, strings.Join(tags, "\x00"), matchPath)
+}
+
+func (m *Manager) removeLocationByTags(domain, tagSpec string, match func(string) bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -128,26 +149,55 @@ func (m *Manager) RemoveLocation(domain, protocol string) error {
 		return fmt.Errorf("failed to read nginx config: %w", err)
 	}
 
-	startMarker := fmt.Sprintf("# --- BEGIN %s ---", protocol)
-	endMarker := fmt.Sprintf("# --- END %s ---", protocol)
-
 	content := string(data)
-	startIdx := strings.Index(content, startMarker)
-	endIdx := strings.Index(content, endMarker)
-
-	if startIdx == -1 || endIdx == -1 {
-		m.logger.Warnf("location block for protocol %s not found", protocol)
-		return nil
+	removed := false
+	for _, tag := range strings.Split(tagSpec, "\x00") {
+		var ok bool
+		content, ok = removeMarkedBlock(content, tag, match)
+		if ok {
+			removed = true
+			break
+		}
 	}
 
-	content = content[:startIdx] + content[endIdx+len(endMarker)+1:]
+	if !removed {
+		m.logger.Warnf("location block for %s not found", tagSpec)
+		return nil
+	}
 
 	if err := security.AtomicWrite(confPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write nginx config: %w", err)
 	}
 
-	m.logger.Infof("removed location for protocol %s", protocol)
+	m.logger.Infof("removed nginx location from %s", confPath)
 	return nil
+}
+
+func removeMarkedBlock(content, tag string, match func(string) bool) (string, bool) {
+	startMarker := fmt.Sprintf("# --- BEGIN %s ---", tag)
+	endMarker := fmt.Sprintf("# --- END %s ---", tag)
+	searchFrom := 0
+
+	for {
+		relStart := strings.Index(content[searchFrom:], startMarker)
+		if relStart == -1 {
+			return content, false
+		}
+		startIdx := searchFrom + relStart
+		relEnd := strings.Index(content[startIdx:], endMarker)
+		if relEnd == -1 {
+			return content, false
+		}
+		endIdx := startIdx + relEnd + len(endMarker)
+		block := content[startIdx:endIdx]
+		if match == nil || match(block) {
+			if endIdx < len(content) && content[endIdx] == '\n' {
+				endIdx++
+			}
+			return content[:startIdx] + content[endIdx:], true
+		}
+		searchFrom = endIdx
+	}
 }
 
 // SetupSubscribeServer configures the subscription server location.

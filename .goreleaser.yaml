@@ -2,7 +2,7 @@ project_name: VasmaX
 builds:
   - id: VasmaX
     binary: VasmaX
-    main: ./cmd/VasmaX
+    main: ./cmd/vasmax
     env:
       - CGO_ENABLED=0
     goos:

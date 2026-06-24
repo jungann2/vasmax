@@ -15,6 +15,15 @@ func newTestLogger() *logrus.Logger {
 	return l
 }
 
+func withoutRetryDelays(t *testing.T) {
+	t.Helper()
+	old := retryDelays
+	retryDelays = nil
+	t.Cleanup(func() {
+		retryDelays = old
+	})
+}
+
 func TestFetchConfig_Success(t *testing.T) {
 	cfg := NodeConfig{
 		ServerPort:    443,
@@ -52,6 +61,27 @@ func TestFetchConfig_Success(t *testing.T) {
 	}
 	if client.configETag != `"config-etag-v1"` {
 		t.Errorf("expected configETag to be stored, got %q", client.configETag)
+	}
+}
+
+func TestFetchConfig_CustomPrefix(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/custom/node/v1/server/UniProxy/config" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(NodeConfig{ServerPort: 443})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL+"/", "test-token", 1, "vmess", newTestLogger())
+	client.SetAPIPrefix("/custom/node/")
+
+	result, err := client.FetchConfig()
+	if err != nil {
+		t.Fatalf("FetchConfig failed: %v", err)
+	}
+	if result == nil || result.ServerPort != 443 {
+		t.Fatalf("unexpected config: %#v", result)
 	}
 }
 
@@ -216,6 +246,8 @@ func TestTestConnection_Success(t *testing.T) {
 }
 
 func TestTestConnection_Failure(t *testing.T) {
+	withoutRetryDelays(t)
+
 	client := NewClient("http://127.0.0.1:1", "test-token", 1, "vmess", newTestLogger())
 	err := client.TestConnection()
 	if err == nil {
@@ -224,6 +256,8 @@ func TestTestConnection_Failure(t *testing.T) {
 }
 
 func TestFetchConfig_HTTPError(t *testing.T) {
+	withoutRetryDelays(t)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("internal error"))

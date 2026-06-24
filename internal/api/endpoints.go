@@ -7,11 +7,16 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // buildURL 构建完整的 API URL（含查询参数）
 func (c *Client) buildURL(path string) string {
-	fullURL := fmt.Sprintf("%s/api/v1/server/UniProxy/%s", c.baseURL, path)
+	prefix := "api"
+	if c.apiPrefix != "" {
+		prefix = strings.Trim(c.apiPrefix, "/")
+	}
+	fullURL := fmt.Sprintf("%s/%s/v1/server/UniProxy/%s", strings.TrimRight(c.baseURL, "/"), prefix, path)
 
 	params := url.Values{}
 	params.Set("token", c.token)
@@ -26,17 +31,17 @@ func (c *Client) buildURL(path string) string {
 // 返回 nil, nil 表示 304 未修改
 // 提取 server_port、push_interval、pull_interval、routes、padding_scheme 等参数
 func (c *Client) FetchConfig() (*NodeConfig, error) {
-	req, err := http.NewRequest(http.MethodGet, c.buildURL("config"), nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	// 原样发送 ETag（含双引号）
-	if c.configETag != "" {
-		req.Header.Set("If-None-Match", c.configETag)
-	}
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := doWithRetry(func() (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodGet, c.buildURL("config"), nil)
+		if err != nil {
+			return nil, fmt.Errorf("创建请求失败: %w", err)
+		}
+		// 原样发送 ETag（含双引号）
+		if c.configETag != "" {
+			req.Header.Set("If-None-Match", c.configETag)
+		}
+		return c.httpClient.Do(req)
+	}, c.logger)
 	if err != nil {
 		return nil, fmt.Errorf("获取节点配置失败: %w", err)
 	}
@@ -74,17 +79,17 @@ func (c *Client) FetchConfig() (*NodeConfig, error) {
 // 返回 nil, nil 表示 304 未修改
 // ETag 含双引号原样存储和发送
 func (c *Client) FetchUsers() ([]User, error) {
-	req, err := http.NewRequest(http.MethodGet, c.buildURL("user"), nil)
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	// 原样发送 ETag（含双引号）
-	if c.userETag != "" {
-		req.Header.Set("If-None-Match", c.userETag)
-	}
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := doWithRetry(func() (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodGet, c.buildURL("user"), nil)
+		if err != nil {
+			return nil, fmt.Errorf("创建请求失败: %w", err)
+		}
+		// 原样发送 ETag（含双引号）
+		if c.userETag != "" {
+			req.Header.Set("If-None-Match", c.userETag)
+		}
+		return c.httpClient.Do(req)
+	}, c.logger)
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)
 	}

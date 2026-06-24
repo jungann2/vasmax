@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # VasmaX 部署脚本
-# 功能：系统检测、依赖安装、Go 二进制下载与校验、systemd 服务配置、
-#       TLS 证书管理（acme.sh）、Nginx 安装、卸载清理
+# 功能：系统检测、依赖安装、Go 二进制下载与校验、systemd 服务配置、卸载清理
 readonly SCRIPT_VERSION="1.0.0"
 readonly BINARY_NAME="VasmaX"
 readonly INSTALL_PATH="/usr/local/bin/${BINARY_NAME}"
+readonly INSTALLER_PATH="/usr/local/bin/install_vasmax.sh"
 readonly CONFIG_DIR="/etc/vasmax"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 readonly LOG_DIR="/var/log/vasmax"
@@ -82,7 +82,7 @@ download_binary() {
     if ! curl -fsSL -o "${tmp_file}" "${download_url}"; then
         rm -f "${tmp_file}"
         red "下载失败: ${download_url}"
-        exit 1
+        return 1
     fi
 
     # SHA256 校验
@@ -97,7 +97,7 @@ download_binary() {
             red "SHA256 校验失败"
             red "期望: ${expected_hash}"
             red "实际: ${actual_hash}"
-            exit 1
+            return 1
         fi
         green "SHA256 校验通过"
     else
@@ -108,6 +108,16 @@ download_binary() {
     mv "${tmp_file}" "${INSTALL_PATH}"
     chmod 755 "${INSTALL_PATH}"
     green "已安装到 ${INSTALL_PATH}"
+}
+
+install_self_script() {
+    local src="${BASH_SOURCE[0]}"
+    if [[ -f "${src}" ]]; then
+        install -m 700 "${src}" "${INSTALLER_PATH}"
+        green "安装脚本已保存到 ${INSTALLER_PATH}"
+    else
+        yellow "无法保存安装脚本自身，请保留当前 install.sh 以便后续更新/卸载"
+    fi
 }
 
 # --- systemd 服务 ---
@@ -131,12 +141,14 @@ ALIAS
 [Unit]
 Description=VasmaX - Proxy Node Manager
 After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/VasmaX -c /etc/vasmax/config.yaml
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 LimitNOFILE=65535
 
 [Install]
@@ -227,85 +239,6 @@ init_dirs() {
     fi
 }
 
-# --- TLS 证书管理 ---
-install_acme() {
-    if command -v ~/.acme.sh/acme.sh &>/dev/null; then
-        green "acme.sh 已安装"
-        return
-    fi
-    echo "安装 acme.sh..."
-    curl -fsSL https://get.acme.sh | sh -s email=admin@example.com
-}
-
-issue_cert() {
-    local domain="${1}"
-    local provider="${2:-letsencrypt}"
-    local mode="${3:-standalone}"
-
-    install_acme
-
-    local ca_server
-    case "${provider}" in
-        letsencrypt) ca_server="--server letsencrypt" ;;
-        buypass) ca_server="--server buypass" ;;
-        zerossl) ca_server="--server zerossl" ;;
-        *) ca_server="--server letsencrypt" ;;
-    esac
-
-    echo "申请证书: ${domain} (${provider}, ${mode})"
-
-    case "${mode}" in
-        standalone)
-            ~/.acme.sh/acme.sh --issue -d "${domain}" --standalone ${ca_server}
-            ;;
-        dns_cf)
-            # Cloudflare DNS API
-            if [[ -z "${CF_Token:-}" ]]; then
-                red "请设置 CF_Token 环境变量"
-                return 1
-            fi
-            export CF_Token
-            ~/.acme.sh/acme.sh --issue -d "${domain}" --dns dns_cf ${ca_server}
-            ;;
-        dns_ali)
-            # 阿里云 DNS API
-            if [[ -z "${Ali_Key:-}" ]] || [[ -z "${Ali_Secret:-}" ]]; then
-                red "请设置 Ali_Key 和 Ali_Secret 环境变量"
-                return 1
-            fi
-            export Ali_Key Ali_Secret
-            ~/.acme.sh/acme.sh --issue -d "${domain}" --dns dns_ali ${ca_server}
-            ;;
-        dns_cf_wildcard)
-            # 通配符证书
-            if [[ -z "${CF_Token:-}" ]]; then
-                red "请设置 CF_Token 环境变量"
-                return 1
-            fi
-            export CF_Token
-            ~/.acme.sh/acme.sh --issue -d "${domain}" -d "*.${domain}" --dns dns_cf ${ca_server}
-            ;;
-    esac
-
-    # 安装证书，续期后自动重启 VasmaX 服务
-    ~/.acme.sh/acme.sh --install-cert -d "${domain}" \
-        --cert-file "${TLS_DIR}/${domain}.crt" \
-        --key-file "${TLS_DIR}/${domain}.key" \
-        --fullchain-file "${TLS_DIR}/${domain}.fullchain.crt" \
-        --reloadcmd "systemctl restart VasmaX"
-
-    chmod 600 "${TLS_DIR}/${domain}.key"
-
-    # 确保 acme.sh cron job 已配置（自动续期）
-    if ! crontab -l 2>/dev/null | grep -q "acme.sh"; then
-        ~/.acme.sh/acme.sh --install-cronjob
-        green "已配置 acme.sh 自动续期 cron job"
-    fi
-
-    green "证书已安装到 ${TLS_DIR}/"
-    green "证书续期后将自动重启 VasmaX 服务"
-}
-
 # --- Nginx 安装 ---
 install_nginx() {
     if command -v nginx &>/dev/null; then
@@ -369,6 +302,43 @@ uninstall_nginx() {
     esac
 }
 
+cleanup_vasmax_nginx_configs() {
+    local conf_dir="/etc/nginx/conf.d"
+    [[ -d "${conf_dir}" ]] || return 0
+
+    local removed=0
+    shopt -s nullglob
+    for conf in "${conf_dir}"/*.conf; do
+        if grep -qE "Managed by VasmaX|VasmaX domain|/etc/vasmax/subscribe|/vlessws|/vmessws|/vmesshup|/vlessgrpc|/trojangrpc" "${conf}" 2>/dev/null; then
+            rm -f -- "${conf}"
+            removed=$((removed + 1))
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ "${removed}" -gt 0 ]]; then
+        yellow "已清理 ${removed} 个 VasmaX Nginx 配置文件"
+        if command -v nginx &>/dev/null; then
+            nginx -t &>/dev/null && systemctl reload nginx 2>/dev/null || true
+        fi
+    fi
+}
+
+cleanup_vasmax_iptables_rules() {
+    command -v iptables &>/dev/null || return 0
+
+    # 只删除 VasmaX 端口跳跃常用规则，绝不 flush 整条 PREROUTING 链。
+    while true; do
+        local rule
+        rule="$(iptables -t nat -S PREROUTING 2>/dev/null | grep -- "--dport 30000:40000" | grep -- "-j REDIRECT" | head -n1 || true)"
+        [[ -n "${rule}" ]] || break
+        # 将 "-A PREROUTING ..." 转成可删除参数。
+        rule="${rule#-A PREROUTING }"
+        # shellcheck disable=SC2086
+        iptables -t nat -D PREROUTING ${rule} 2>/dev/null || break
+    done
+}
+
 # --- 卸载 ---
 uninstall() {
     yellow "开始卸载 VasmaX..."
@@ -379,16 +349,19 @@ uninstall() {
     # 停止 VasmaX 服务
     systemctl stop VasmaX 2>/dev/null || true
     systemctl disable VasmaX 2>/dev/null || true
+    systemctl reset-failed VasmaX 2>/dev/null || true
 
     # 停止并清理 Xray-core
     systemctl stop xray.service 2>/dev/null || true
     systemctl disable xray.service 2>/dev/null || true
+    systemctl reset-failed xray.service 2>/dev/null || true
     rm -f /etc/systemd/system/xray.service
     rm -rf /usr/local/xray-core/
 
     # 停止并清理 sing-box
     systemctl stop sing-box.service 2>/dev/null || true
     systemctl disable sing-box.service 2>/dev/null || true
+    systemctl reset-failed sing-box.service 2>/dev/null || true
     rm -f /etc/systemd/system/sing-box.service
     rm -rf /usr/local/sing-box/
 
@@ -396,6 +369,7 @@ uninstall() {
     rm -f "${INSTALL_PATH}"
     rm -f "${SERVICE_FILE}"
     rm -f /usr/local/bin/vasmax
+    rm -f "${INSTALLER_PATH}"
 
     # 清理 BBR/sysctl 配置文件
     rm -f /etc/sysctl.d/99-vasmax-bbr.conf
@@ -417,16 +391,9 @@ uninstall() {
         green "当前内核为原装内核（${current_kernel}），BBR 配置已清理"
     fi
 
-    # 清理 iptables NAT 端口跳跃规则（如有）
-    if command -v iptables &>/dev/null; then
-        iptables -t nat -F PREROUTING 2>/dev/null || true
-    fi
-
-    # 清理 VasmaX 生成的 Nginx 配置（完全清除模式下删除 conf.d 中的域名配置）
-    if [[ "${1:-}" == "--purge" ]] && [[ -d /etc/nginx/conf.d/ ]]; then
-        rm -f /etc/nginx/conf.d/*.conf 2>/dev/null || true
-        yellow "已清理 Nginx 配置文件"
-    fi
+    # 清理 VasmaX 生成的 Nginx/iptables 配置。不会删除其他站点或其他 NAT 规则。
+    cleanup_vasmax_iptables_rules
+    cleanup_vasmax_nginx_configs
 
     # 删除配置和数据（需确认）
     if [[ "${1:-}" == "--purge" ]]; then
@@ -454,18 +421,14 @@ show_menu() {
     echo ""
     green "VasmaX 部署脚本 v${SCRIPT_VERSION}"
     echo "─────────────────────────────"
-    echo " 1. 安装 VasmaX"
+    echo " 1. 安装/修复 VasmaX"
     echo " 2. 更新 VasmaX"
     echo " 3. 卸载 VasmaX"
-    echo " 4. 启动服务"
-    echo " 5. 停止服务"
-    echo " 6. 重启服务"
-    echo " 7. 查看状态"
-    echo " 8. 查看日志"
-    echo " 9. 申请 TLS 证书"
     echo " 0. 退出"
     echo ""
-    read -rp "请选择 [0-9]: " choice
+    yellow "安装完成后的协议、证书、启动/停止、日志等操作请运行: vasmax"
+    echo ""
+    read -rp "请选择 [0-3]: " choice
 
     case "${choice}" in
         1) do_install ;;
@@ -478,37 +441,9 @@ show_menu() {
                 *) uninstall ;;
             esac
             ;;
-        4) systemctl start VasmaX && green "已启动" ;;
-        5) systemctl stop VasmaX && green "已停止" ;;
-        6) systemctl restart VasmaX && green "已重启" ;;
-        7) systemctl status VasmaX ;;
-        8) journalctl -u VasmaX -f --no-pager ;;
-        9) cert_menu ;;
         0) exit 0 ;;
         *) red "无效选择" ;;
     esac
-}
-
-cert_menu() {
-    read -rp "请输入域名: " domain
-    echo "证书提供商: 1) Let's Encrypt  2) Buypass  3) ZeroSSL"
-    read -rp "选择 [1-3]: " provider_choice
-    case "${provider_choice}" in
-        1) provider="letsencrypt" ;;
-        2) provider="buypass" ;;
-        3) provider="zerossl" ;;
-        *) provider="letsencrypt" ;;
-    esac
-    echo "验证方式: 1) standalone  2) Cloudflare DNS  3) 阿里云 DNS  4) CF 通配符"
-    read -rp "选择 [1-4]: " mode_choice
-    case "${mode_choice}" in
-        1) mode="standalone" ;;
-        2) mode="dns_cf" ;;
-        3) mode="dns_ali" ;;
-        4) mode="dns_cf_wildcard" ;;
-        *) mode="standalone" ;;
-    esac
-    issue_cert "${domain}" "${provider}" "${mode}"
 }
 
 do_install() {
@@ -516,6 +451,7 @@ do_install() {
     install_deps
     install_nginx
     init_dirs
+    install_self_script
     download_binary
     setup_service
     if [[ "${OS_TYPE}" != "alpine" ]]; then
@@ -527,13 +463,43 @@ do_install() {
 
 do_update() {
     detect_os
+    install_self_script
+    local was_active=0
+    local backup_file=""
+    if [[ "${OS_TYPE}" != "alpine" ]] && systemctl is-active --quiet VasmaX 2>/dev/null; then
+        was_active=1
+    fi
+    if [[ -f "${INSTALL_PATH}" ]]; then
+        backup_file="${INSTALL_PATH}.bak.$(date +%Y%m%d%H%M%S)"
+        cp -a "${INSTALL_PATH}" "${backup_file}"
+        green "已备份当前二进制: ${backup_file}"
+    fi
+
+    update_failed() {
+        local rc=$?
+        trap - ERR
+        red "更新失败，正在尝试回滚"
+        if [[ -n "${backup_file}" && -f "${backup_file}" ]]; then
+            cp -a "${backup_file}" "${INSTALL_PATH}"
+            chmod 755 "${INSTALL_PATH}"
+            yellow "已恢复旧二进制"
+        fi
+        if [[ "${OS_TYPE}" != "alpine" && "${was_active}" -eq 1 ]]; then
+            systemctl start VasmaX 2>/dev/null || true
+        fi
+        exit "${rc}"
+    }
+    trap update_failed ERR
+
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl stop VasmaX 2>/dev/null || true
     fi
     download_binary
+    "${INSTALL_PATH}" --version >/dev/null
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX
     fi
+    trap - ERR
     green "更新完成"
     ${INSTALL_PATH} --version 2>/dev/null || true
 }
@@ -549,12 +515,6 @@ main() {
         install) do_install ;;
         update) do_update ;;
         uninstall) uninstall "${2:-}" ;;
-        start) systemctl start VasmaX ;;
-        stop) systemctl stop VasmaX ;;
-        restart) systemctl restart VasmaX ;;
-        status) systemctl status VasmaX ;;
-        log) journalctl -u VasmaX -f --no-pager ;;
-        cert) shift; issue_cert "$@" ;;
         *) show_menu ;;
     esac
 }

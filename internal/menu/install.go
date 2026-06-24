@@ -283,9 +283,9 @@ func (m *InstallMenu) installCombination() {
 				PrintWarning(fmt.Sprintf("未自动检测到 %s 的 TLS 证书", domain))
 				PrintInfo("域名模式协议需要 TLS 证书才能正常工作")
 				fmt.Println()
-				PrintOption(1, "申请新证书（acme.sh）")
-				PrintOption(2, "手动指定证书路径")
-				PrintOption(3, "跳过，稍后在 TLS 证书管理中申请")
+				PrintOption(1, "申请新证书（进入 acme.sh 申请流程，验证方式与 TLS 证书管理一致）")
+				PrintOption(2, "手动指定已有证书路径（fullchain + key）")
+				PrintOption(3, "跳过（稍后在 TLS 证书管理申请后，需要重新安装/更新该协议配置）")
 				choice := ReadChoice("请选择", []string{"1", "2", "3"})
 				switch choice {
 				case "1":
@@ -1284,7 +1284,11 @@ func (m *InstallMenu) uninstallProtocol() {
 				// 使用协议独立域名或全局域名
 				protoDomain := m.config.GetProtocolDomain(name)
 				if protoDomain != "" {
-					if err := m.nginxMgr.RemoveLocation(protoDomain, name); err != nil {
+					locationPath := defaultWSPath(p)
+					if p.TransportType() == "grpc" {
+						locationPath = defaultGRPCServiceName(p)
+					}
+					if err := m.nginxMgr.RemoveLocationByPath(protoDomain, p.TransportType(), locationPath); err != nil {
 						m.logger.WithError(err).Warnf("删除 Nginx location 失败: %s", name)
 					} else {
 						PrintInfo(fmt.Sprintf("已删除 Nginx 反代配置: %s", name))
@@ -1308,6 +1312,7 @@ func (m *InstallMenu) uninstallProtocol() {
 		}
 		delete(m.config.ProtocolModes, name)
 		delete(m.config.ProtocolDomains, name)
+		delete(m.config.ProtocolPorts, name)
 
 		PrintSuccess(fmt.Sprintf("%s 已卸载", name))
 	}
@@ -1345,21 +1350,23 @@ func (m *InstallMenu) uninstallProtocol() {
 			PrintInfo("已无 Xray 协议，正在停止 Xray...")
 			// 清理 Stats API 配置
 			_ = protocol.RemoveStatsAPIConfig(m.config.Paths.XrayConf)
-			m.coreMgr.StopAll() // StopAll 会安全跳过未安装的
+			_ = m.coreMgr.StopXray()
 			PrintSuccess("Xray 已停止")
 		}
 	}
 	if needRestartSingBox {
 		if hasSingBox {
 			PrintInfo("正在重启 sing-box...")
-			if err := m.coreMgr.RestartSingBox(); err != nil {
+			if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
+				PrintWarning(fmt.Sprintf("sing-box 配置合并失败: %v", err))
+			} else if err := m.coreMgr.RestartSingBox(); err != nil {
 				PrintWarning(fmt.Sprintf("重启 sing-box 失败: %v", err))
 			} else {
 				PrintSuccess("sing-box 已重启")
 			}
 		} else {
 			PrintInfo("已无 sing-box 协议，正在停止 sing-box...")
-			m.coreMgr.StopAll()
+			_ = m.coreMgr.StopSingBox()
 			PrintSuccess("sing-box 已停止")
 		}
 	}
@@ -1428,65 +1435,43 @@ func protocolLabel(p protocol.Protocol) string {
 // needsNginxProxy 判断协议是否需要 Nginx 反向代理
 // ws/grpc/httpupgrade 类型的非 Reality 协议需要 Nginx 做反代
 func needsNginxProxy(p protocol.Protocol) bool {
-	transport := p.TransportType()
-	name := p.Name()
-	// Reality 协议自己处理 TLS，不需要 Nginx
-	if strings.Contains(name, "reality") {
-		return false
-	}
-	return transport == "ws" || transport == "grpc" || transport == "httpupgrade"
+	return protocol.NeedsNginxProxy(p)
 }
 
 // externalPort 返回协议的外部端口（客户端连接用）
 // Nginx 反代协议外部端口为 443，其他协议使用自身端口
 func externalPort(p protocol.Protocol) int {
-	if needsNginxProxy(p) {
-		return 443
-	}
-	return p.DefaultPort()
+	return protocol.ExternalPort(p, nil)
 }
 
 // externalPortWithConfig 返回协议的外部端口（优先使用配置中的自定义端口）
 func externalPortWithConfig(p protocol.Protocol, cfg *config.Config) int {
-	if needsNginxProxy(p) {
-		return 443
-	}
-	if cfg.ProtocolPorts != nil {
-		if port, ok := cfg.ProtocolPorts[p.Name()]; ok && port > 0 {
-			return port
-		}
-	}
-	return p.DefaultPort()
+	return protocol.ExternalPort(p, cfg)
 }
 
 // defaultWSPath 为协议生成默认的 WS/HTTPUpgrade 路径
 func defaultWSPath(p protocol.Protocol) string {
-	// 每个协议用不同路径避免冲突
-	switch p.Name() {
-	case "vless_ws_tls":
-		return "/vlessws"
-	case "vmess_ws_tls":
-		return "/vmessws"
-	case "vmess_httpupgrade_tls":
-		return "/vmesshup"
-	case "vless_reality_xhttp":
-		return "/realityxhttp"
-	default:
-		return "/" + strings.ReplaceAll(p.Name(), "_", "")
-	}
+	return protocol.DefaultWSPath(p)
 }
 
 // defaultGRPCServiceName 为 gRPC 协议生成默认 serviceName
 func defaultGRPCServiceName(p protocol.Protocol) string {
-	switch p.Name() {
-	case "vless_grpc_tls":
-		return "vlessgrpc"
-	case "trojan_grpc_tls":
-		return "trojangrpc"
-	case "vless_reality_grpc":
-		return "realitygrpc"
+	return protocol.DefaultGRPCServiceName(p)
+}
+
+func jsonNumberToInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
 	default:
-		return strings.ReplaceAll(p.Name(), "_", "")
+		return 0, false
 	}
 }
 
@@ -2022,11 +2007,19 @@ func (m *InstallMenu) migrateInboundPorts() {
 			continue
 		}
 
-		portVal, ok := inbound["port"]
+		portKey := "port"
+		portVal, ok := inbound[portKey]
+		if !ok {
+			portKey = "listen_port"
+			portVal, ok = inbound[portKey]
+		}
 		if !ok {
 			continue
 		}
-		currentPort := int(portVal.(float64))
+		currentPort, ok := jsonNumberToInt(portVal)
+		if !ok {
+			continue
+		}
 
 		// 检查端口是否需要迁移
 		if currentPort == expectedPort {
@@ -2038,13 +2031,13 @@ func (m *InstallMenu) migrateInboundPorts() {
 		if m.config.ProtocolPorts != nil {
 			if cp, ok := m.config.ProtocolPorts[protoName]; ok && cp > 0 && cp != p.DefaultPort() {
 				// 用户自定义端口，但配置文件端口不匹配 — 修正配置文件
-				inbound["port"] = float64(cp)
+				inbound[portKey] = cp
 			} else {
 				// 使用新的 DefaultPort
-				inbound["port"] = float64(p.DefaultPort())
+				inbound[portKey] = p.DefaultPort()
 			}
 		} else {
-			inbound["port"] = float64(p.DefaultPort())
+			inbound[portKey] = p.DefaultPort()
 		}
 
 		// 重新序列化并写入
@@ -2060,7 +2053,7 @@ func (m *InstallMenu) migrateInboundPorts() {
 			continue
 		}
 
-		newPort := int(inbound["port"].(float64))
+		newPort, _ := jsonNumberToInt(inbound[portKey])
 		PrintInfo(fmt.Sprintf("已自动修正 %s 端口: %d → %d", protoName, currentPort, newPort))
 
 		// 更新 ProtocolPorts

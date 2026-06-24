@@ -40,6 +40,9 @@ func (a *AnyTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error)
 			"key_path":         params.KeyFile,
 		},
 	}
+	if len(params.PaddingScheme) > 0 {
+		inbound["padding_scheme"] = params.PaddingScheme
+	}
 	return json.Marshal(inbound)
 }
 

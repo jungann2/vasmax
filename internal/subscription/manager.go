@@ -161,23 +161,8 @@ func (m *Manager) GenerateForUser(u *user.UserEntry) error {
 
 // buildServerInfoForProtocol 为指定协议构建正确的 ServerInfo
 func (m *Manager) buildServerInfoForProtocol(p protocol.Protocol, getIP func() string) *protocol.ServerInfo {
-	// 外部端口：Nginx 反代协议用 443，其他用配置端口或默认端口
-	port := 443
-	isNginxProxy := p.TransportType() == "ws" || p.TransportType() == "grpc" || p.TransportType() == "httpupgrade"
-	if strings.Contains(p.Name(), "reality") {
-		isNginxProxy = false
-	}
-	if !isNginxProxy {
-		if m.config.ProtocolPorts != nil {
-			if customPort, ok := m.config.ProtocolPorts[p.Name()]; ok && customPort > 0 {
-				port = customPort
-			} else {
-				port = p.DefaultPort()
-			}
-		} else {
-			port = p.DefaultPort()
-		}
-	}
+	// 外部端口：Nginx 反代协议用 443，直连协议用配置端口或默认端口。
+	port := protocol.ExternalPort(p, m.config)
 
 	// 域名：优先使用协议独立域名，否则全局域名
 	domain := m.config.GetProtocolDomain(p.Name())
@@ -206,13 +191,13 @@ func (m *Manager) buildServerInfoForProtocol(p protocol.Protocol, getIP func() s
 	path := ""
 	switch p.TransportType() {
 	case "ws", "httpupgrade", "xhttp":
-		path = defaultWSPathByName(p.Name())
+		path = protocol.DefaultWSPath(p)
 	}
 
 	// gRPC serviceName
 	serviceName := ""
 	if p.TransportType() == "grpc" {
-		serviceName = defaultGRPCServiceNameByName(p.Name())
+		serviceName = protocol.DefaultGRPCServiceName(p)
 	}
 
 	info := &protocol.ServerInfo{
@@ -231,38 +216,6 @@ func (m *Manager) buildServerInfoForProtocol(p protocol.Protocol, getIP func() s
 	}
 
 	return info
-}
-
-// defaultWSPathByName 根据协议名返回默认 WS 路径
-func defaultWSPathByName(name string) string {
-	switch name {
-	case "vless_ws_tls":
-		return "/vlessws"
-	case "vmess_ws_tls":
-		return "/vmessws"
-	case "vmess_httpupgrade_tls":
-		return "/vmesshu"
-	case "anytls":
-		return "/anytls"
-	case "vless_reality_xhttp":
-		return "/xhttp"
-	default:
-		return "/vasmax"
-	}
-}
-
-// defaultGRPCServiceNameByName 根据协议名返回默认 gRPC serviceName
-func defaultGRPCServiceNameByName(name string) string {
-	switch name {
-	case "vless_grpc_tls":
-		return "vless-grpc"
-	case "trojan_grpc_tls":
-		return "trojan-grpc"
-	case "vless_reality_grpc":
-		return "reality-grpc"
-	default:
-		return "vasmax-grpc"
-	}
 }
 
 // getInstalledProtocols 获取已安装的协议列表

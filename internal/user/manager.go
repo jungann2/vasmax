@@ -78,7 +78,10 @@ func NewManager() *Manager {
 func (m *Manager) loadLocalUsers() error {
 	data, err := os.ReadFile(m.localFile)
 	if err != nil {
-		return err // 文件不存在时静默忽略
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 	var users []localUserJSON
 	if err := json.Unmarshal(data, &users); err != nil {
@@ -132,7 +135,10 @@ func (m *Manager) saveLocalUsers() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.localFile, data, 0600)
+	if err := os.MkdirAll(filepath.Dir(m.localFile), 0700); err != nil {
+		return err
+	}
+	return security.AtomicWrite(m.localFile, data, 0600)
 }
 
 // UpdateUsers 原子替换用户表（托管模式，从 API 用户列表）

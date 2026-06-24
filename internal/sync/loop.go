@@ -4,6 +4,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Loop struct {
 	coreManager    *core.Manager
 	registry       *protocol.Registry
 	config         *config.Config
+	nodeConfig     *api.NodeConfig
 	logger         *logrus.Logger
 	auditLog       *audit.Logger
 	xrayStats      *traffic.XrayStatsCollector
@@ -46,6 +48,7 @@ func NewLoop(
 	coreMgr *core.Manager,
 	reg *protocol.Registry,
 	cfg *config.Config,
+	nodeCfg *api.NodeConfig,
 	logger *logrus.Logger,
 	auditLog *audit.Logger,
 ) *Loop {
@@ -57,6 +60,7 @@ func NewLoop(
 		coreManager:    coreMgr,
 		registry:       reg,
 		config:         cfg,
+		nodeConfig:     nodeCfg,
 		logger:         logger,
 		auditLog:       auditLog,
 		xrayStats:      traffic.NewXrayStatsCollector("", ""),
@@ -124,17 +128,24 @@ func (l *Loop) pullUsers(ctx context.Context) error {
 		return nil
 	}
 
+	if managedUsersEqual(l.userManager.GetAllUsers(), users) {
+		l.cacheUsers(users)
+		l.logger.WithField("count", len(users)).Debug("用户列表未变化，跳过配置重载")
+		return nil
+	}
+
+	// 先确认配置可完整生成，再切换内存用户表；避免配置生成失败时内存状态
+	// 与当前运行核心不一致。
+	if err := l.regenerateConfigs(users); err != nil {
+		l.logger.WithError(err).Error("重新生成协议配置失败，跳过核心重载以保留当前运行配置")
+		return err
+	}
+
 	// 原子替换用户表
 	l.userManager.UpdateUsers(users)
 
 	// 缓存用户列表
 	l.cacheUsers(users)
-
-	// 重新生成各协议用户配置并写入 ConfigPath
-	if err := l.regenerateConfigs(users); err != nil {
-		l.logger.WithError(err).Error("重新生成协议配置失败")
-		// 不 return，仍然尝试重载核心（可能旧配置仍可用）
-	}
 
 	// 重载核心
 	if err := l.reloadCores(); err != nil {
@@ -162,6 +173,8 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		apiUsers[i] = &users[i]
 	}
 
+	var errs []error
+
 	// 按核心类型分组已安装协议
 	for _, protoName := range l.config.Protocols {
 		p, ok := l.registry.Get(protoName)
@@ -169,19 +182,43 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 			continue
 		}
 
+		domain := l.config.GetProtocolDomain(protoName)
+		certFile := l.config.TLS.CertFile
+		keyFile := l.config.TLS.KeyFile
+		if domain != "" {
+			certFile, keyFile = config.DetectCertPath(&config.TLSConfig{
+				Domain:   domain,
+				CertFile: certFile,
+				KeyFile:  keyFile,
+			})
+		}
+		if p.CoreType() == "singbox" && p.Name() != "socks5" && (certFile == "" || keyFile == "") {
+			certPaths, err := security.EnsureSelfSignedCert("/etc/vasmax/tls")
+			if err != nil {
+				l.logger.WithError(err).Error("生成 sing-box 自签证书失败")
+				errs = append(errs, fmt.Errorf("%s: generate self-signed cert: %w", protoName, err))
+				continue
+			}
+			certFile = certPaths.CertFile
+			keyFile = certPaths.KeyFile
+		}
+
 		params := &protocol.InboundParams{
-			Port:          p.DefaultPort(),
-			Domain:        l.config.TLS.Domain,
-			CertFile:      l.config.TLS.CertFile,
-			KeyFile:       l.config.TLS.KeyFile,
+			Port:          protocol.EffectiveInboundPort(p, l.config),
+			Domain:        domain,
+			CertFile:      certFile,
+			KeyFile:       keyFile,
 			Users:         apiUsers,
 			Tag:           protoName,
-			Path:          "/vasmax",
-			ServiceName:   "vasmax-grpc",
+			Path:          protocol.DefaultWSPath(p),
+			ServiceName:   protocol.DefaultGRPCServiceName(p),
 			TLSMinVersion: l.config.TLS.MinVersion,
 			TLSMaxVersion: l.config.TLS.MaxVersion,
 		}
-		if l.config.Reality.PrivateKey != "" {
+		if l.nodeConfig != nil && p.Name() == "anytls" {
+			params.PaddingScheme = l.nodeConfig.PaddingScheme
+		}
+		if l.config.Reality.PrivateKey != "" && isRealityProtocol(protoName) {
 			params.Reality = &l.config.Reality
 		}
 		if l.config.Hysteria2.Port > 0 {
@@ -194,6 +231,7 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		inboundJSON, err := p.GenerateInbound(params)
 		if err != nil {
 			l.logger.WithError(err).Errorf("生成 %s 入站配置失败", protoName)
+			errs = append(errs, fmt.Errorf("%s: generate inbound: %w", protoName, err))
 			continue
 		}
 
@@ -218,10 +256,59 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		confPath := filepath.Join(confDir, fileName)
 		if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
 			l.logger.WithError(err).Errorf("写入 %s 配置失败", confPath)
+			errs = append(errs, fmt.Errorf("%s: write %s: %w", protoName, confPath, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
+}
+
+func managedUsersEqual(existing []*user.UserEntry, next []api.User) bool {
+	if len(existing) != len(next) {
+		return false
+	}
+
+	byID := make(map[int]*user.UserEntry, len(existing))
+	for _, entry := range existing {
+		if entry == nil {
+			return false
+		}
+		if _, exists := byID[entry.ID]; exists {
+			return false
+		}
+		byID[entry.ID] = entry
+	}
+
+	for _, apiUser := range next {
+		entry, ok := byID[apiUser.ID]
+		if !ok {
+			return false
+		}
+		if entry.UUID != apiUser.UUID {
+			return false
+		}
+		if entry.SpeedLimit != intPtrValue(apiUser.SpeedLimit) {
+			return false
+		}
+		if entry.DeviceLimit != intPtrValue(apiUser.DeviceLimit) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func intPtrValue(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func isRealityProtocol(protoName string) bool {
+	return protoName == "vless_reality_vision" ||
+		protoName == "vless_reality_grpc" ||
+		protoName == "vless_reality_xhttp"
 }
 
 // reloadCores 重载所有已安装的核心
@@ -240,9 +327,17 @@ func (l *Loop) reloadCores() error {
 		}
 	}
 
+	var errs []error
+
 	if hasXray {
 		if err := l.coreManager.ReloadXray(); err != nil {
 			l.logger.WithError(err).Warn("Xray 热重载失败")
+			if restartErr := l.coreManager.RestartXray(); restartErr != nil {
+				l.logger.WithError(restartErr).Warn("Xray 重启失败")
+				errs = append(errs, fmt.Errorf("xray reload: %w; restart: %w", err, restartErr))
+			} else {
+				l.logger.Info("Xray 重启成功")
+			}
 		} else {
 			l.logger.Info("Xray 热重载成功")
 		}
@@ -252,14 +347,16 @@ func (l *Loop) reloadCores() error {
 		// sing-box 不支持多文件配置，需先合并为单一 config.json
 		if err := l.coreManager.MergeSingBoxConfig(); err != nil {
 			l.logger.WithError(err).Warn("sing-box 配置合并失败，跳过重启")
+			errs = append(errs, fmt.Errorf("sing-box merge config: %w", err))
 		} else if err := l.coreManager.RestartSingBox(); err != nil {
 			l.logger.WithError(err).Warn("sing-box 重启失败")
+			errs = append(errs, fmt.Errorf("sing-box restart: %w", err))
 		} else {
 			l.logger.Info("sing-box 重启成功")
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // collectXrayTraffic 从 Xray Stats API 采集流量并累加到 trafficCounter

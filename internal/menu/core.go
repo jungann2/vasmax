@@ -44,11 +44,12 @@ func (m *CoreMenu) Show() {
 		PrintOption(5, "卸载 Xray-core")
 		PrintOption(6, "卸载 sing-box")
 		PrintOption(7, "更新 GeoData")
-		PrintOption(8, "重启所有核心")
-		PrintOption(9, "停止所有核心")
+		PrintOption(8, "启动/恢复当前配置需要的核心")
+		PrintOption(9, "重启当前配置需要的核心")
+		PrintOption(10, "停止所有核心")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"})
 		switch choice {
 		case "1":
 			m.updateCore("xray")
@@ -68,9 +69,15 @@ func (m *CoreMenu) Show() {
 			if err := m.coreMgr.StartAll(); err != nil {
 				PrintError(fmt.Sprintf("启动失败: %v", err))
 			} else {
-				PrintSuccess("所有核心已启动")
+				PrintSuccess("当前配置需要的核心已启动")
 			}
 		case "9":
+			if err := m.coreMgr.RestartAll(); err != nil {
+				PrintError(fmt.Sprintf("重启失败: %v", err))
+			} else {
+				PrintSuccess("当前配置需要的核心已重启")
+			}
+		case "10":
 			if err := m.coreMgr.StopAll(); err != nil {
 				PrintError(fmt.Sprintf("停止失败: %v", err))
 			} else {

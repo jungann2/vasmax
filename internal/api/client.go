@@ -55,7 +55,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body []byte
 	if c.apiPrefix != "" {
 		prefix = c.apiPrefix
 	}
-	fullURL := fmt.Sprintf("%s/%s/v1/server/UniProxy/%s", c.baseURL, prefix, path)
+	fullURL := fmt.Sprintf("%s/%s/v1/server/UniProxy/%s", strings.TrimRight(c.baseURL, "/"), prefix, path)
 
 	params := url.Values{}
 	params.Set("token", c.token)

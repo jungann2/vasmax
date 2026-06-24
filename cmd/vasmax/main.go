@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -168,9 +169,14 @@ func main() {
 			if nodeCfg.BaseConfig.PushInterval > 0 {
 				pushInterval = time.Duration(nodeCfg.BaseConfig.PushInterval) * time.Second
 			}
+			if applyManagedNodeConfig(cfg, nodeCfg, protocol.DefaultRegistry(), logger) {
+				if err := internalConfig.SaveConfig(*configPath, cfg); err != nil {
+					logger.WithError(err).Warn("保存 Xboard 下发配置失败")
+				}
+			}
 		}
 
-		syncLoop := internalSync.NewLoop(apiClient, userMgr, trafficCtr, aliveTrk, coreMgr, protocol.DefaultRegistry(), cfg, logger, auditLog)
+		syncLoop := internalSync.NewLoop(apiClient, userMgr, trafficCtr, aliveTrk, coreMgr, protocol.DefaultRegistry(), cfg, nodeCfg, logger, auditLog)
 
 		go func() {
 			defer func() {
@@ -277,6 +283,80 @@ func cacheNodeConfig(path string, cfg *api.NodeConfig, logger *logrus.Logger) {
 	}
 	if err := security.AtomicWriteJSON(path, cache, 0600); err != nil {
 		logger.WithError(err).Warn("写入节点配置缓存失败")
+	}
+}
+
+func applyManagedNodeConfig(cfg *internalConfig.Config, nodeCfg *api.NodeConfig, reg *protocol.Registry, logger *logrus.Logger) bool {
+	if cfg == nil || nodeCfg == nil {
+		return false
+	}
+
+	changed := false
+	if nodeCfg.ServerName != "" && cfg.TLS.Domain != nodeCfg.ServerName {
+		cfg.TLS.Domain = nodeCfg.ServerName
+		changed = true
+	}
+
+	if nodeCfg.ServerPort <= 0 {
+		return changed
+	}
+
+	matches := managedDirectProtocols(cfg, reg)
+	if len(matches) != 1 {
+		if len(matches) > 1 {
+			logger.WithFields(logrus.Fields{
+				"node_type": cfg.NodeType,
+				"protocols": matches,
+			}).Warn("Xboard 下发端口匹配到多个直连协议，跳过自动覆盖以避免端口冲突")
+		}
+		return changed
+	}
+
+	if cfg.ProtocolPorts == nil {
+		cfg.ProtocolPorts = make(map[string]int)
+	}
+	if cfg.ProtocolPorts[matches[0]] != nodeCfg.ServerPort {
+		cfg.ProtocolPorts[matches[0]] = nodeCfg.ServerPort
+		logger.WithFields(logrus.Fields{
+			"protocol": matches[0],
+			"port":     nodeCfg.ServerPort,
+		}).Info("已应用 Xboard 下发监听端口")
+		changed = true
+	}
+
+	return changed
+}
+
+func managedDirectProtocols(cfg *internalConfig.Config, reg *protocol.Registry) []string {
+	var matches []string
+	for _, protoName := range cfg.Protocols {
+		p, ok := reg.Get(protoName)
+		if !ok || protocol.NeedsNginxProxy(p) {
+			continue
+		}
+		if protocolMatchesNodeType(protoName, cfg.NodeType) {
+			matches = append(matches, protoName)
+		}
+	}
+	return matches
+}
+
+func protocolMatchesNodeType(protoName, nodeType string) bool {
+	switch strings.ToLower(nodeType) {
+	case "anytls", "tuic", "naive":
+		return protoName == nodeType
+	case "hysteria", "hysteria2":
+		return protoName == "hysteria2"
+	case "socks", "socks5":
+		return protoName == "socks5"
+	case "vless":
+		return strings.HasPrefix(protoName, "vless_")
+	case "vmess":
+		return strings.HasPrefix(protoName, "vmess_")
+	case "trojan":
+		return strings.HasPrefix(protoName, "trojan_")
+	default:
+		return protoName == nodeType
 	}
 }
 

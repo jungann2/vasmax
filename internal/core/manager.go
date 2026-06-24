@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"vasmax/internal/config"
+	"vasmax/internal/protocol"
 	"vasmax/pkg/downloader"
 )
 
@@ -144,9 +146,11 @@ func (m *Manager) uninstallCore(serviceName, binaryPath string) error {
 	return nil
 }
 
-// StartAll 启动所有已安装的核心
+// StartAll 启动当前配置实际需要的核心，并停止不再被协议使用的核心。
 func (m *Manager) StartAll() error {
-	if fileExists(m.xray.BinaryPath) {
+	needed := m.neededCores()
+
+	if needed["xray"] && fileExists(m.xray.BinaryPath) {
 		// 确保 service 文件存在
 		servicePath := "/etc/systemd/system/" + m.xray.ServiceName
 		if !fileExists(servicePath) {
@@ -156,8 +160,10 @@ func (m *Manager) StartAll() error {
 		if err := systemctl("start", m.xray.ServiceName); err != nil {
 			m.logger.WithError(err).Error("启动 Xray 失败")
 		}
+	} else {
+		_ = systemctl("stop", m.xray.ServiceName)
 	}
-	if fileExists(m.singbox.BinaryPath) {
+	if needed["singbox"] && fileExists(m.singbox.BinaryPath) {
 		servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
 		if !fileExists(servicePath) {
 			m.installSingBoxService()
@@ -166,15 +172,62 @@ func (m *Manager) StartAll() error {
 		if err := systemctl("start", m.singbox.ServiceName); err != nil {
 			m.logger.WithError(err).Error("启动 sing-box 失败")
 		}
+	} else {
+		_ = systemctl("stop", m.singbox.ServiceName)
 	}
 	return nil
 }
 
+func (m *Manager) neededCores() map[string]bool {
+	needed := map[string]bool{}
+	if m.config == nil {
+		return needed
+	}
+	reg := protocol.DefaultRegistry()
+	for _, protoName := range m.config.Protocols {
+		if p, ok := reg.Get(protoName); ok {
+			needed[p.CoreType()] = true
+		}
+	}
+	return needed
+}
+
 // StopAll 停止所有核心
 func (m *Manager) StopAll() error {
-	systemctl("stop", m.xray.ServiceName)
-	systemctl("stop", m.singbox.ServiceName)
+	_ = m.StopXray()
+	_ = m.StopSingBox()
 	return nil
+}
+
+// StopXray stops only the Xray service.
+func (m *Manager) StopXray() error {
+	return systemctl("stop", m.xray.ServiceName)
+}
+
+// StopSingBox stops only the sing-box service.
+func (m *Manager) StopSingBox() error {
+	return systemctl("stop", m.singbox.ServiceName)
+}
+
+// RestartAll restarts the cores required by the current protocol set.
+func (m *Manager) RestartAll() error {
+	needed := m.neededCores()
+	var errs []error
+
+	if needed["xray"] {
+		if err := m.RestartXray(); err != nil {
+			errs = append(errs, fmt.Errorf("restart xray: %w", err))
+		}
+	}
+	if needed["singbox"] {
+		if err := m.MergeSingBoxConfig(); err != nil {
+			errs = append(errs, fmt.Errorf("merge sing-box config: %w", err))
+		} else if err := m.RestartSingBox(); err != nil {
+			errs = append(errs, fmt.Errorf("restart sing-box: %w", err))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // ReloadXray 热重载 Xray-core（SIGUSR1）
@@ -270,12 +323,15 @@ func (m *Manager) installXrayService() error {
 Description=Xray Service
 Documentation=https://xtls.github.io
 After=network.target nss-lookup.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=%s run -confdir %s
 Restart=on-failure
 RestartPreventExitStatus=23
+RestartSec=10
 LimitNPROC=10000
 LimitNOFILE=1000000
 
@@ -334,12 +390,15 @@ func (m *Manager) installSingBoxService() error {
 Description=sing-box Service
 Documentation=https://sing-box.sagernet.org
 After=network.target nss-lookup.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=%s run -C %s
 Restart=on-failure
 RestartPreventExitStatus=23
+RestartSec=10
 LimitNPROC=10000
 LimitNOFILE=1000000
 

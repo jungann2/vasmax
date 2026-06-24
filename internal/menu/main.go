@@ -83,7 +83,7 @@ func (m *MainMenu) Show() {
 		m.printHeader()
 		m.printOptions()
 
-		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}
+		choices := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18"}
 		choice := ReadChoice(i18n.T("menu.select"), choices)
 
 		switch choice {
@@ -119,6 +119,10 @@ func (m *MainMenu) Show() {
 			m.tools.Show()
 		case "16":
 			m.monitor.Show()
+		case "17":
+			m.showServiceMenu()
+		case "18":
+			m.protocols.Show()
 		case "0":
 			return
 		}
@@ -207,7 +211,7 @@ func (m *MainMenu) printOptions() {
 	PrintOption(1, "更新 VasmaX")
 	PrintOption(2, "卸载 VasmaX")
 	PrintSeparator()
-	PrintOption(3, "安装管理")
+	PrintOption(3, "安装管理（安装/卸载协议）")
 	PrintOption(4, "账号管理")
 	PrintOption(5, "分流工具")
 	PrintOption(6, "BT 下载管理")
@@ -216,13 +220,85 @@ func (m *MainMenu) printOptions() {
 	PrintOption(9, "订阅管理")
 	PrintOption(10, "额外端口管理")
 	PrintOption(11, "ALPN 切换")
-	PrintOption(12, "核心管理")
+	PrintOption(12, "核心管理（启动/停止/重启 Xray 和 sing-box）")
 	PrintOption(13, "Xboard-Plus 对接管理")
 	PrintOption(14, "TLS 证书管理")
 	PrintOption(15, "其他工具（BBR/伪装站管理/健康检查）")
 	PrintOption(16, "实时监控")
+	PrintOption(17, "VasmaX 服务管理（启动/停止/重启/状态/日志）")
+	PrintOption(18, "协议专项管理（Reality/Hysteria2/TUIC 参数）")
 	PrintOptionStr("0", "退出")
 	fmt.Println()
+}
+
+func (m *MainMenu) showServiceMenu() {
+	for {
+		PrintTitle("VasmaX 服务管理")
+		PrintInfo("管理 VasmaX 主服务；Xray/sing-box 请在「核心管理」中操作")
+		m.printServiceState()
+		PrintSeparator()
+		PrintOption(1, "启动 VasmaX 主服务")
+		PrintOption(2, "停止 VasmaX 主服务")
+		PrintOption(3, "重启 VasmaX 主服务")
+		PrintOption(4, "查看 systemd 状态")
+		PrintOption(5, "查看最近 120 行日志")
+		PrintOptionStr("0", "返回上级菜单")
+
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5"})
+		switch choice {
+		case "1":
+			m.runServiceCommand("start", "已启动 VasmaX 主服务")
+		case "2":
+			if Confirm("停止主服务会暂停托管同步、流量上报和自动配置更新，确认停止?") {
+				m.runServiceCommand("stop", "已停止 VasmaX 主服务")
+			}
+		case "3":
+			m.runServiceCommand("restart", "已重启 VasmaX 主服务")
+		case "4":
+			m.runInteractiveCommand("systemctl", "status", "VasmaX", "--no-pager")
+		case "5":
+			m.runInteractiveCommand("journalctl", "-u", "VasmaX", "-n", "120", "--no-pager")
+		case "0":
+			return
+		}
+	}
+}
+
+func (m *MainMenu) printServiceState() {
+	cmd := exec.Command("systemctl", "is-active", "VasmaX")
+	out, err := cmd.Output()
+	state := strings.TrimSpace(string(out))
+	if err != nil || state == "" {
+		state = "unknown"
+	}
+	switch state {
+	case "active":
+		PrintInfo("主服务状态: " + Green("运行中"))
+	case "inactive":
+		PrintInfo("主服务状态: " + Yellow("已停止"))
+	case "failed":
+		PrintInfo("主服务状态: " + Red("失败"))
+	default:
+		PrintInfo("主服务状态: " + Yellow(state))
+	}
+}
+
+func (m *MainMenu) runServiceCommand(action, success string) {
+	if err := exec.Command("systemctl", action, "VasmaX").Run(); err != nil {
+		PrintError(fmt.Sprintf("执行失败: %v", err))
+		return
+	}
+	PrintSuccess(success)
+}
+
+func (m *MainMenu) runInteractiveCommand(name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		PrintError(fmt.Sprintf("执行失败: %v", err))
+	}
 }
 
 // updateSelf 更新 VasmaX 自身
@@ -235,7 +311,7 @@ func (m *MainMenu) updateSelf() {
 		// 尝试从 GitHub 下载最新 install.sh 并执行
 		PrintInfo("正在下载最新安装脚本...")
 		cmd := exec.Command("bash", "-c",
-			"curl -fsSL https://raw.githubusercontent.com/prlina01/VasmaX/main/install.sh -o /tmp/vasmax_update.sh && bash /tmp/vasmax_update.sh update")
+			"curl -fsSL https://raw.githubusercontent.com/jungann2/vasmax/main/install.sh -o /tmp/vasmax_update.sh && bash /tmp/vasmax_update.sh update")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
@@ -281,7 +357,7 @@ func (m *MainMenu) uninstallSelf() {
 	installScript := "/usr/local/bin/install_vasmax.sh"
 	if _, err := os.Stat(installScript); os.IsNotExist(err) {
 		PrintInfo("正在下载卸载脚本...")
-		cmdStr := "curl -fsSL https://raw.githubusercontent.com/prlina01/VasmaX/main/install.sh -o /tmp/vasmax_uninstall.sh && bash /tmp/vasmax_uninstall.sh uninstall"
+		cmdStr := "curl -fsSL https://raw.githubusercontent.com/jungann2/vasmax/main/install.sh -o /tmp/vasmax_uninstall.sh && bash /tmp/vasmax_uninstall.sh uninstall"
 		if purge != "" {
 			cmdStr += " " + purge
 		}

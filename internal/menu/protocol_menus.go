@@ -23,6 +23,78 @@ func NewProtocolMenus(cfg *config.Config, fwMgr *firewall.Manager, logger *logru
 	return &ProtocolMenus{config: cfg, firewallMgr: fwMgr, logger: logger}
 }
 
+// Show displays installed protocol-specific management entries.
+func (m *ProtocolMenus) Show() {
+	for {
+		PrintTitle("协议专项管理")
+		PrintInfo("这里只显示已安装且有专项参数可调的协议")
+		PrintInfo("安装/卸载协议请返回主菜单进入「安装管理」")
+		PrintSeparator()
+
+		handlers := make(map[string]func())
+		idx := 1
+		if m.hasRealityProtocol() {
+			key := fmt.Sprintf("%d", idx)
+			PrintOption(idx, "Reality 管理（伪装域名、Reality 密钥）")
+			handlers[key] = m.ShowReality
+			idx++
+		}
+		if m.protocolInstalled("hysteria2") {
+			key := fmt.Sprintf("%d", idx)
+			PrintOption(idx, "Hysteria2 管理（端口跳跃、上下行速率）")
+			handlers[key] = m.ShowHysteria2
+			idx++
+		}
+		if m.protocolInstalled("tuic") {
+			key := fmt.Sprintf("%d", idx)
+			PrintOption(idx, "TUIC 管理（拥塞控制算法）")
+			handlers[key] = m.ShowTuic
+			idx++
+		}
+
+		if len(handlers) == 0 {
+			PrintWarning("当前没有已安装的专项管理协议")
+			PrintInfo("可管理协议: Reality、Hysteria2、TUIC")
+			ReadInput("按 Enter 返回")
+			return
+		}
+
+		PrintOptionStr("0", "返回上级菜单")
+		choices := make([]string, 0, len(handlers))
+		for i := 1; i < idx; i++ {
+			choices = append(choices, fmt.Sprintf("%d", i))
+		}
+		choice := ReadChoice("请选择", choices)
+		if choice == "0" {
+			return
+		}
+		if handler := handlers[choice]; handler != nil {
+			handler()
+		}
+	}
+}
+
+func (m *ProtocolMenus) protocolInstalled(name string) bool {
+	for _, protoName := range m.config.Protocols {
+		if protoName == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *ProtocolMenus) hasRealityProtocol() bool {
+	if m.config.Reality.PrivateKey != "" {
+		return true
+	}
+	for _, protoName := range m.config.Protocols {
+		if strings.HasPrefix(protoName, "vless_reality_") {
+			return true
+		}
+	}
+	return false
+}
+
 // ShowHysteria2 displays the Hysteria2 management menu.
 func (m *ProtocolMenus) ShowHysteria2() {
 	for {
@@ -187,10 +259,9 @@ func (m *ProtocolMenus) ShowTuic() {
 		PrintInfo(fmt.Sprintf("端口: %d  拥塞控制: %s", m.config.Tuic.Port, m.config.Tuic.CongestionControl))
 		PrintSeparator()
 		PrintOption(1, "修改拥塞控制算法")
-		PrintOption(2, "端口跳跃管理")
 		PrintOptionStr("0", "返回")
 
-		choice := ReadChoice("请选择", []string{"1", "2"})
+		choice := ReadChoice("请选择", []string{"1"})
 		switch choice {
 		case "1":
 			PrintOption(1, "bbr")
@@ -210,8 +281,6 @@ func (m *ProtocolMenus) ShowTuic() {
 			}
 			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
 			PrintSuccess("拥塞控制算法已更新")
-		case "2":
-			PrintInfo("Tuic 端口跳跃 - 与 Hysteria2 类似")
 		case "0":
 			return
 		}

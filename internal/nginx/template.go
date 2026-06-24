@@ -9,6 +9,9 @@ import (
 func generateServerBlock(params *NginxParams) string {
 	var b strings.Builder
 
+	b.WriteString("# Managed by VasmaX. Safe to remove when uninstalling VasmaX.\n")
+	b.WriteString(fmt.Sprintf("# VasmaX domain: %s\n\n", params.Domain))
+
 	// HTTP → HTTPS redirect
 	b.WriteString("server {\n")
 	b.WriteString("    listen 80;\n")
@@ -57,7 +60,7 @@ func generateServerBlock(params *NginxParams) string {
 // generateLocationBlock generates a location block for a specific protocol.
 func generateLocationBlock(protocolType, path string, backendPort int) string {
 	var b strings.Builder
-	tag := strings.ToUpper(strings.ReplaceAll(protocolType, "/", "_"))
+	tag := locationTag(protocolType, path)
 
 	b.WriteString(fmt.Sprintf("    # --- BEGIN %s ---\n", tag))
 
@@ -105,6 +108,15 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 
 	b.WriteString(fmt.Sprintf("    # --- END %s ---\n", tag))
 	return b.String()
+}
+
+func locationTag(protocolType, path string) string {
+	cleanPath := strings.Trim(path, "/")
+	if cleanPath == "" {
+		cleanPath = "root"
+	}
+	replacer := strings.NewReplacer("/", "_", "-", "_", ".", "_")
+	return strings.ToUpper(replacer.Replace(protocolType + "_" + cleanPath))
 }
 
 // generateSubscribeLocation generates the subscription server location block.
