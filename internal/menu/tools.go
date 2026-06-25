@@ -68,8 +68,12 @@ func (m *ToolsMenu) cdnMenu() {
 	choice := ReadChoice("请选择", []string{"1", "2", "3"})
 	switch choice {
 	case "1":
-		addr := ReadInput("请输入 CDN 域名/IP")
+		addr := ReadInput("请输入 CDN 域名/IP（不要带 http:// 或 https://）")
 		if addr != "" {
+			if strings.Contains(addr, "://") {
+				PrintError("CDN 地址不要带 http:// 或 https://")
+				return
+			}
 			m.config.CDN.Enabled = true
 			m.config.CDN.Address = addr
 			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
@@ -133,8 +137,12 @@ func (m *ToolsMenu) fakeSiteMenu() {
 			}
 		}
 	case "2":
-		url := ReadInput("请输入模板 URL")
+		url := ReadInput("请输入模板 URL（必须带 http:// 或 https://）")
 		if url != "" {
+			if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+				PrintError("模板 URL 必须带 http:// 或 https://")
+				return
+			}
 			if err := m.nginxMgr.DeployFakeSite(url); err != nil {
 				PrintError(fmt.Sprintf("部署失败: %v", err))
 			} else {

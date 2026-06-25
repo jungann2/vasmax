@@ -44,7 +44,7 @@ func NewClient(baseURL, token string, nodeID int, nodeType string, logger *logru
 
 // SetAPIPrefix 设置自定义 API 路径前缀
 func (c *Client) SetAPIPrefix(prefix string) {
-	c.apiPrefix = strings.Trim(prefix, "/")
+	c.apiPrefix = strings.Trim(strings.TrimSpace(prefix), "/")
 }
 
 // doRequest 通用请求方法

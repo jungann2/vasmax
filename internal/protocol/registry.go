@@ -48,6 +48,7 @@ type InboundParams struct {
 	PaddingScheme []string // AnyTLS padding scheme
 	TLSMinVersion string   // "1.0"/"1.1"/"1.2"/"1.3"，空值默认 "1.2"
 	TLSMaxVersion string   // "1.2"/"1.3"，空值默认 "1.3"
+	KeepAlive     config.ConnectionConfig
 }
 
 // ServerInfo 服务器连接信息（用于生成订阅链接）

@@ -47,7 +47,7 @@ func (v *VlessTCPTLSVision) GenerateInbound(params *InboundParams) (json.RawMess
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VlessTCPTLSVision) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -135,7 +135,7 @@ func (v *VlessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, er
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VlessWSTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -234,7 +234,7 @@ func (v *VlessGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage, 
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VlessGRPCTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -334,7 +334,7 @@ func (v *VlessRealityVision) GenerateInbound(params *InboundParams) (json.RawMes
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VlessRealityVision) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -454,7 +454,7 @@ func (v *VlessRealityGRPC) GenerateInbound(params *InboundParams) (json.RawMessa
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VlessRealityGRPC) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -578,7 +578,7 @@ func (v *VlessRealityXHTTP) GenerateInbound(params *InboundParams) (json.RawMess
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VlessRealityXHTTP) GenerateUserEntry(user *api.User) (json.RawMessage, error) {

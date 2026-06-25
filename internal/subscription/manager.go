@@ -139,7 +139,8 @@ func (m *Manager) GenerateForUser(u *user.UserEntry) error {
 	if subDomain == "" {
 		subDomain = m.config.TLS.Domain
 	}
-	if clashData, err := GenerateClashFullProfile(clashProxies, subDomain); err == nil {
+	profileOptions := ProfileOptionsFromConfig(m.config.Subscription)
+	if clashData, err := GenerateClashFullProfileWithOptions(clashProxies, subDomain, profileOptions); err == nil {
 		if writeErr := security.AtomicWrite(filepath.Join(subDir, "clash"), clashData, 0644); writeErr != nil {
 			m.logger.Warnf("failed to write clash subscription: %v", writeErr)
 		}
@@ -148,7 +149,7 @@ func (m *Manager) GenerateForUser(u *user.UserEntry) error {
 	}
 
 	// 生成 sing-box 订阅
-	if sbData, err := GenerateSingBoxFullProfile(sbOutbounds); err == nil {
+	if sbData, err := GenerateSingBoxFullProfileWithOptions(sbOutbounds, profileOptions); err == nil {
 		if writeErr := security.AtomicWrite(filepath.Join(subDir, "singbox"), sbData, 0644); writeErr != nil {
 			m.logger.Warnf("failed to write singbox subscription: %v", writeErr)
 		}

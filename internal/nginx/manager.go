@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"vasmax/internal/config"
 	"vasmax/internal/security"
 
 	"github.com/sirupsen/logrus"
@@ -30,10 +31,12 @@ type ProtocolLocation struct {
 
 // NginxParams holds parameters for generating Nginx configuration.
 type NginxParams struct {
-	Domain    string
-	CertFile  string
-	KeyFile   string
-	Protocols []ProtocolLocation
+	Domain                string
+	CertFile              string
+	KeyFile               string
+	Protocols             []ProtocolLocation
+	LongConnectionTimeout string
+	Connection            config.ConnectionConfig
 }
 
 // Manager manages Nginx configuration files.

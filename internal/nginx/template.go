@@ -16,16 +16,16 @@ func generateServerBlock(params *NginxParams) string {
 
 	// HTTP → HTTPS redirect
 	b.WriteString("server {\n")
-	b.WriteString("    listen 80;\n")
-	b.WriteString("    listen [::]:80;\n")
+	b.WriteString(fmt.Sprintf("    listen 80%s;\n", nginxKeepAliveListenOption(params)))
+	b.WriteString(fmt.Sprintf("    listen [::]:80%s;\n", nginxKeepAliveListenOption(params)))
 	b.WriteString(fmt.Sprintf("    server_name %s;\n", params.Domain))
 	b.WriteString("    return 301 https://$server_name$request_uri;\n")
 	b.WriteString("}\n\n")
 
 	// HTTPS server block
 	b.WriteString("server {\n")
-	b.WriteString("    listen 443 ssl;\n")
-	b.WriteString("    listen [::]:443 ssl;\n")
+	b.WriteString(fmt.Sprintf("    listen 443 ssl%s;\n", nginxKeepAliveListenOption(params)))
+	b.WriteString(fmt.Sprintf("    listen [::]:443 ssl%s;\n", nginxKeepAliveListenOption(params)))
 	b.WriteString("    http2 on;\n")
 	b.WriteString(fmt.Sprintf("    server_name %s;\n\n", params.Domain))
 
@@ -43,8 +43,9 @@ func generateServerBlock(params *NginxParams) string {
 	b.WriteString("    index index.html;\n\n")
 
 	// Protocol location blocks
+	timeout := effectiveLongConnectionTimeout(params.LongConnectionTimeout)
 	for _, p := range params.Protocols {
-		b.WriteString(generateLocationBlock(p.Type, p.Path, p.BackendPort))
+		b.WriteString(generateLocationBlockWithTimeout(p.Type, p.Path, p.BackendPort, timeout))
 		b.WriteString("\n")
 	}
 
@@ -61,8 +62,13 @@ func generateServerBlock(params *NginxParams) string {
 
 // generateLocationBlock generates a location block for a specific protocol.
 func generateLocationBlock(protocolType, path string, backendPort int) string {
+	return generateLocationBlockWithTimeout(protocolType, path, backendPort, longConnectionTimeout)
+}
+
+func generateLocationBlockWithTimeout(protocolType, path string, backendPort int, timeout string) string {
 	var b strings.Builder
 	tag := locationTag(protocolType, path)
+	timeout = effectiveLongConnectionTimeout(timeout)
 
 	b.WriteString(fmt.Sprintf("    # --- BEGIN %s ---\n", tag))
 
@@ -78,8 +84,8 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 		b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 		b.WriteString("        proxy_buffering off;\n")
 		b.WriteString("        proxy_request_buffering off;\n")
-		b.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", longConnectionTimeout))
-		b.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", longConnectionTimeout))
+		b.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", timeout))
+		b.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", timeout))
 		b.WriteString("    }\n")
 
 	case "grpc":
@@ -87,8 +93,8 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 		b.WriteString(fmt.Sprintf("        grpc_pass grpc://127.0.0.1:%d;\n", backendPort))
 		b.WriteString("        grpc_set_header Host $host;\n")
 		b.WriteString("        grpc_set_header X-Real-IP $remote_addr;\n")
-		b.WriteString(fmt.Sprintf("        grpc_read_timeout %s;\n", longConnectionTimeout))
-		b.WriteString(fmt.Sprintf("        grpc_send_timeout %s;\n", longConnectionTimeout))
+		b.WriteString(fmt.Sprintf("        grpc_read_timeout %s;\n", timeout))
+		b.WriteString(fmt.Sprintf("        grpc_send_timeout %s;\n", timeout))
 		b.WriteString("    }\n")
 
 	case "httpupgrade":
@@ -102,8 +108,8 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 		b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 		b.WriteString("        proxy_buffering off;\n")
 		b.WriteString("        proxy_request_buffering off;\n")
-		b.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", longConnectionTimeout))
-		b.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", longConnectionTimeout))
+		b.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", timeout))
+		b.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", timeout))
 		b.WriteString("    }\n")
 
 	default:
@@ -116,6 +122,33 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 
 	b.WriteString(fmt.Sprintf("    # --- END %s ---\n", tag))
 	return b.String()
+}
+
+func effectiveLongConnectionTimeout(timeout string) string {
+	timeout = strings.TrimSpace(timeout)
+	if timeout == "" {
+		return longConnectionTimeout
+	}
+	return timeout
+}
+
+func nginxKeepAliveListenOption(params *NginxParams) string {
+	if params == nil || params.Connection.KeepAliveMode == "off" {
+		return ""
+	}
+	idle := params.Connection.KeepAliveIdleSeconds
+	if idle <= 0 {
+		idle = 8
+	}
+	interval := params.Connection.KeepAliveIntervalSeconds
+	if interval <= 0 {
+		interval = 8
+	}
+	probes := params.Connection.KeepAliveProbes
+	if probes <= 0 {
+		probes = 3
+	}
+	return fmt.Sprintf(" so_keepalive=%ds:%ds:%d", idle, interval, probes)
 }
 
 func locationTag(protocolType, path string) string {

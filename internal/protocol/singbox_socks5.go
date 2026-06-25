@@ -31,6 +31,7 @@ func (s *Socks5) GenerateInbound(params *InboundParams) (json.RawMessage, error)
 		"listen_port": params.Port,
 		"users":       users,
 	}
+	applySingBoxTCPKeepAlive(inbound, params)
 	return json.Marshal(inbound)
 }
 

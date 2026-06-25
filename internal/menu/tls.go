@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"vasmax/internal/config"
+	"vasmax/internal/security"
 )
 
 // TLSMenu handles TLS certificate management in the CLI.
@@ -109,8 +110,12 @@ func (m *TLSMenu) issueCert() {
 	}
 
 	// 输入域名
-	domain := ReadInput("请输入域名")
+	domain := ReadInput("请输入域名（只填域名，不要带 http:// 或 https://，如 node.example.com）")
 	if domain == "" {
+		return
+	}
+	if err := security.ValidateDomain(domain); err != nil {
+		PrintError(fmt.Sprintf("域名无效: %v", err))
 		return
 	}
 
@@ -149,7 +154,7 @@ func (m *TLSMenu) issueCert() {
 		args = []string{"--issue", "-d", domain, "--standalone", "--server", caServer}
 	case "2":
 		PrintSuccess("  直接回车选择默认 /var/www/html")
-		webroot := ReadInput("请输入 Nginx webroot 路径")
+		webroot := ReadInput("请输入 Nginx webroot 路径（本地目录路径，不是 URL，默认 /var/www/html）")
 		if webroot == "" {
 			webroot = "/var/www/html"
 		}
@@ -329,8 +334,12 @@ func (m *TLSMenu) detectPanelCert() {
 
 	domain := m.config.TLS.Domain
 	if domain == "" {
-		domain = ReadInput("请输入域名")
+		domain = ReadInput("请输入域名（只填域名，不要带 http:// 或 https://，如 node.example.com）")
 		if domain == "" {
+			return
+		}
+		if err := security.ValidateDomain(domain); err != nil {
+			PrintError(fmt.Sprintf("域名无效: %v", err))
 			return
 		}
 	}

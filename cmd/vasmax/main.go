@@ -42,10 +42,19 @@ func main() {
 	showVersion := flag.Bool("version", false, "显示版本号")
 	showMenu := flag.Bool("menu", false, "显示交互式菜单")
 	runHealth := flag.Bool("health", false, "运行健康检查")
+	writeConfigReference := flag.Bool("write-config-reference", false, "写入配置参考文件")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("VasmaX %s\n", version)
+		return
+	}
+
+	if *writeConfigReference {
+		if err := internalConfig.WriteReferenceConfig(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "写入配置参考文件失败: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -73,6 +82,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer logCleanup()
+	if err := internalConfig.WriteReferenceConfig(*configPath); err != nil {
+		logger.WithError(err).Warn("写入配置参考文件失败")
+	}
 
 	// 设置语言
 	i18n.SetLang(cfg.Lang)
@@ -130,17 +142,16 @@ func main() {
 		logger.WithError(err).Warn("加载流量缓存失败，从零开始")
 	}
 
-	// 启动核心
-	if err := coreMgr.StartAll(); err != nil {
-		logger.WithError(err).Warn("启动核心失败")
-	}
-
 	// 设置上下文和信号处理
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	var syncLoop *internalSync.Loop
+	var pullInterval = 60 * time.Second
+	var pushInterval = 60 * time.Second
 
 	// 托管模式：启动 SyncLoop
 	if !cfg.Standalone && cfg.APIHost != "" {
@@ -160,8 +171,7 @@ func main() {
 			logger.WithError(err).Warn("获取节点配置失败，使用默认间隔")
 		}
 
-		pullInterval := 60 * time.Second
-		pushInterval := 60 * time.Second
+		nodeConfigChanged := false
 		if nodeCfg != nil {
 			if nodeCfg.BaseConfig.PullInterval > 0 {
 				pullInterval = time.Duration(nodeCfg.BaseConfig.PullInterval) * time.Second
@@ -170,13 +180,31 @@ func main() {
 				pushInterval = time.Duration(nodeCfg.BaseConfig.PushInterval) * time.Second
 			}
 			if applyManagedNodeConfig(cfg, nodeCfg, protocol.DefaultRegistry(), logger) {
+				nodeConfigChanged = true
 				if err := internalConfig.SaveConfig(*configPath, cfg); err != nil {
 					logger.WithError(err).Warn("保存 Xboard 下发配置失败")
 				}
 			}
 		}
+		pullInterval = clampManagedInterval("pull_interval", pullInterval, cfg.Sync.MinPullIntervalSeconds, logger)
+		pushInterval = clampManagedInterval("push_interval", pushInterval, cfg.Sync.MinPushIntervalSeconds, logger)
 
-		syncLoop := internalSync.NewLoop(apiClient, userMgr, trafficCtr, aliveTrk, coreMgr, protocol.DefaultRegistry(), cfg, nodeCfg, logger, auditLog)
+		syncLoop = internalSync.NewLoop(apiClient, userMgr, trafficCtr, aliveTrk, coreMgr, protocol.DefaultRegistry(), cfg, nodeCfg, logger, auditLog)
+		if nodeConfigChanged {
+			syncLoop.MarkConfigDirty("xboard node config changed")
+			if err := syncLoop.RunOnce(ctx); err != nil {
+				logger.WithError(err).Warn("启动前同步失败，将继续启动现有核心配置")
+			}
+		}
+	}
+
+	// 启动核心。托管模式若启动前同步成功，这里会启动已修正后的配置；
+	// 若同步失败，则继续启动现有配置，避免服务完全不可用。
+	if err := coreMgr.StartAll(); err != nil {
+		logger.WithError(err).Warn("启动核心失败")
+	}
+
+	if syncLoop != nil {
 
 		go func() {
 			defer func() {
@@ -358,6 +386,24 @@ func protocolMatchesNodeType(protoName, nodeType string) bool {
 	default:
 		return protoName == nodeType
 	}
+}
+
+func clampManagedInterval(name string, interval time.Duration, minSeconds int, logger *logrus.Logger) time.Duration {
+	if minSeconds <= 0 {
+		return interval
+	}
+	minInterval := time.Duration(minSeconds) * time.Second
+	if interval >= minInterval {
+		return interval
+	}
+	if logger != nil {
+		logger.WithFields(logrus.Fields{
+			"name":      name,
+			"requested": interval,
+			"minimum":   minInterval,
+		}).Warn("Xboard 下发同步间隔过短，已使用本地最小间隔保护")
+	}
+	return minInterval
 }
 
 func parseJSON(data []byte, v interface{}) error {

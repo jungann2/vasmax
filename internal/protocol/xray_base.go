@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 
 	"vasmax/internal/security"
@@ -31,22 +32,15 @@ func GenerateBaseOutboundConfig(confDir string) error {
 	return security.AtomicWrite(filepath.Join(confDir, "02_outbounds.json"), data, 0644)
 }
 
-// GenerateBaseDNSConfig 生成 Xray 基础 DNS 配置（03_dns.json）
+// GenerateBaseDNSConfig removes the legacy fixed public DNS config.
+// Without an explicit DNS block, Xray uses the system resolver, which better
+// matches the server's region, network, and provider DNS setup.
 func GenerateBaseDNSConfig(confDir string) error {
-	config := map[string]interface{}{
-		"dns": map[string]interface{}{
-			"servers": []string{
-				"8.8.8.8",
-				"1.1.1.1",
-				"localhost",
-			},
-		},
-	}
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
+	dnsPath := filepath.Join(confDir, "03_dns.json")
+	if err := os.Remove(dnsPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return security.AtomicWrite(filepath.Join(confDir, "03_dns.json"), data, 0644)
+	return nil
 }
 
 // EnsureBaseConfigs 确保 Xray 基础配置文件存在（outbound + dns）

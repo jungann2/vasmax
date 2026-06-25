@@ -150,7 +150,7 @@ func (m *InstallMenu) installCombination() {
 
 	if !multiDomainMode {
 		// 统一域名模式
-		domain := ReadInput("请输入域名")
+		domain := ReadInput("请输入域名（只填域名，不要带 http:// 或 https://，如 node.example.com）")
 		if domain == "" {
 			PrintError("此安装方式需要域名，如无域名请使用一键 Reality 组合安装")
 			return
@@ -165,7 +165,7 @@ func (m *InstallMenu) installCombination() {
 	} else {
 		// 每个协议独立域名
 		for _, p := range selected {
-			domain := ReadInput(fmt.Sprintf("%s 域名", p.Name()))
+			domain := ReadInput(fmt.Sprintf("%s 域名（只填域名，不要带 http:// 或 https://）", p.Name()))
 			if domain == "" {
 				PrintError(fmt.Sprintf("%s 需要域名，安装中止", p.Name()))
 				return
@@ -450,10 +450,11 @@ func (m *InstallMenu) installCombination() {
 		// 使用协议对应的域名
 		protoDomain := protocolDomains[p.Name()]
 		params := &protocol.InboundParams{
-			Port:   port,
-			Users:  apiUsers,
-			Tag:    p.Name(),
-			Domain: protoDomain,
+			Port:      port,
+			Users:     apiUsers,
+			Tag:       p.Name(),
+			Domain:    protoDomain,
+			KeepAlive: m.config.Connection,
 		}
 
 		// Reality 协议使用 Reality 配置（端口使用协议自身的默认端口或用户自定义端口）
@@ -796,10 +797,11 @@ func (m *InstallMenu) installReality() {
 
 	for _, p := range selected {
 		params := &protocol.InboundParams{
-			Port:    p.DefaultPort(),
-			Users:   apiUsers,
-			Tag:     p.Name(),
-			Reality: &m.config.Reality,
+			Port:      p.DefaultPort(),
+			Users:     apiUsers,
+			Tag:       p.Name(),
+			Reality:   &m.config.Reality,
+			KeepAlive: m.config.Connection,
 		}
 
 		// 非 Reality 协议不需要 Reality 配置
@@ -1022,12 +1024,21 @@ func getServerIP() string {
 	}
 
 	// 回退：通过出站连接获取本机 IP（可能是内网 IP）
-	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 3*time.Second)
-	if err == nil {
-		defer conn.Close()
+	fallbackTargets := []string{
+		"www.cloudflare.com:443",
+		"www.google.com:443",
+		"www.baidu.com:443",
+	}
+	for _, target := range fallbackTargets {
+		conn, err := net.DialTimeout("udp", target, 3*time.Second)
+		if err != nil {
+			continue
+		}
 		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			conn.Close()
 			return addr.IP.String()
 		}
+		conn.Close()
 	}
 	return "YOUR_SERVER_IP"
 }
@@ -1052,8 +1063,12 @@ func (m *InstallMenu) showRealityMenu() {
 		choice := ReadChoice("请选择", []string{"1", "2", "3"})
 		switch choice {
 		case "1":
-			dest := ReadInput("请输入新的伪装域名 (如 www.apple.com)")
+			dest := ReadInput("请输入新的伪装域名（只填域名或 域名:端口，不要带 http:// 或 https://，如 www.apple.com）")
 			if dest != "" {
+				if strings.Contains(dest, "://") {
+					PrintError("伪装域名不要带 http:// 或 https://")
+					continue
+				}
 				if !strings.Contains(dest, ":") {
 					dest = dest + ":443"
 				}
@@ -1544,7 +1559,7 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 			args = []string{"--issue", "-d", domain, "--standalone", "--server", caServer}
 		case "2":
 			PrintSuccess("  直接回车选择默认 /var/www/html")
-			webroot := ReadInput("请输入 Nginx webroot 路径")
+			webroot := ReadInput("请输入 Nginx webroot 路径（本地目录路径，不是 URL，默认 /var/www/html）")
 			if webroot == "" {
 				webroot = "/var/www/html"
 			}
@@ -1801,10 +1816,12 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 	PrintInfo("正在自动配置 Nginx 反向代理...")
 
 	params := &nginx.NginxParams{
-		Domain:    domain,
-		CertFile:  certFile,
-		KeyFile:   keyFile,
-		Protocols: locations,
+		Domain:                domain,
+		CertFile:              certFile,
+		KeyFile:               keyFile,
+		Protocols:             locations,
+		LongConnectionTimeout: m.config.Nginx.LongConnectionTimeout,
+		Connection:            m.config.Connection,
 	}
 
 	if err := m.nginxMgr.GenerateConfig(params); err != nil {
@@ -1914,10 +1931,12 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 		}
 
 		params := &nginx.NginxParams{
-			Domain:    domain,
-			CertFile:  certFile,
-			KeyFile:   keyFile,
-			Protocols: g.locations,
+			Domain:                domain,
+			CertFile:              certFile,
+			KeyFile:               keyFile,
+			Protocols:             g.locations,
+			LongConnectionTimeout: m.config.Nginx.LongConnectionTimeout,
+			Connection:            m.config.Connection,
 		}
 
 		if err := m.nginxMgr.GenerateConfig(params); err != nil {

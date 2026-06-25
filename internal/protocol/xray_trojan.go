@@ -46,7 +46,7 @@ func (t *TrojanTCPTLS) GenerateInbound(params *InboundParams) (json.RawMessage, 
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (t *TrojanTCPTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -127,7 +127,7 @@ func (t *TrojanGRPCTLS) GenerateInbound(params *InboundParams) (json.RawMessage,
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (t *TrojanGRPCTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {

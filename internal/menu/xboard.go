@@ -62,11 +62,11 @@ func (m *XboardMenu) Show() {
 func (m *XboardMenu) enable() {
 	PrintTitle("启用 Xboard-Plus 对接")
 
-	PrintInfo("请输入面板地址，支持 http 或 https")
+	PrintInfo("请输入完整面板地址，必须带 http:// 或 https://")
 	PrintInfo("示例: http://123.45.67.89:7001 或 https://panel.example.com")
 	PrintInfo("如果 Xboard-Plus 设置了自定义 API 路径前缀，无需在此填写")
-	apiHost := ReadInput("面板地址 (结尾不需要 /)")
-	if err := security.ValidateURL(apiHost); err != nil {
+	apiHost := ReadInput("面板地址（必须带 http:// 或 https://，结尾不需要 /）")
+	if err := security.ValidateHTTPURL(apiHost); err != nil {
 		PrintError(fmt.Sprintf("地址无效: %v", err))
 		return
 	}
@@ -79,8 +79,14 @@ func (m *XboardMenu) enable() {
 	}
 
 	PrintInfo("如果 Xboard-Plus 后台设置了自定义 API 路径前缀，请在此填写")
-	PrintInfo("留空则使用默认路径 (api)")
-	apiPrefix := ReadInput("自定义 API 路径前缀 (留空使用默认 api 路径)")
+	PrintInfo("只填路径前缀，不填域名，也不要带 http:// 或 https://")
+	PrintInfo("示例: api、custom-api 或 /custom/node；留空使用默认 api")
+	apiPrefix := ReadInput("自定义 API 路径前缀（可留空，不填域名）")
+	apiPrefix = security.NormalizeAPIPrefix(apiPrefix)
+	if err := security.ValidateAPIPrefix(apiPrefix); err != nil {
+		PrintError(fmt.Sprintf("API 路径前缀无效: %v", err))
+		return
+	}
 
 	nodeIDStr := ReadInput("请输入节点 ID")
 	var nodeID int
@@ -167,9 +173,9 @@ func (m *XboardMenu) modifyConfig() {
 	PrintInfo(fmt.Sprintf("当前节点类型: %s", m.config.NodeType))
 
 	PrintSuccess("  直接回车不修改")
-	apiHost := ReadInput("新面板地址")
+	apiHost := ReadInput("新面板地址（必须带 http:// 或 https://，结尾不需要 /）")
 	if apiHost != "" {
-		if err := security.ValidateURL(apiHost); err != nil {
+		if err := security.ValidateHTTPURL(apiHost); err != nil {
 			PrintError(fmt.Sprintf("地址无效: %v", err))
 			return
 		}
@@ -183,11 +189,17 @@ func (m *XboardMenu) modifyConfig() {
 	}
 
 	PrintSuccess("  直接回车不修改，输入 clear 清除自定义前缀恢复默认")
-	apiPrefix := ReadInput("新 API 路径前缀")
-	if apiPrefix == "clear" {
+	PrintInfo("API 前缀只填路径，不填域名，也不要带 http:// 或 https://；示例: api、custom-api 或 /custom/node")
+	apiPrefix := strings.TrimSpace(ReadInput("新 API 路径前缀（可留空，不填域名）"))
+	if strings.EqualFold(apiPrefix, "clear") {
 		m.config.APIPrefix = ""
 		PrintInfo("已恢复默认 API 路径")
 	} else if apiPrefix != "" {
+		apiPrefix = security.NormalizeAPIPrefix(apiPrefix)
+		if err := security.ValidateAPIPrefix(apiPrefix); err != nil {
+			PrintError(fmt.Sprintf("API 路径前缀无效: %v", err))
+			return
+		}
 		m.config.APIPrefix = apiPrefix
 	}
 

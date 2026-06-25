@@ -3,6 +3,8 @@ package nginx
 import (
 	"strings"
 	"testing"
+
+	"vasmax/internal/config"
 )
 
 func TestLocationTagIncludesPath(t *testing.T) {
@@ -96,5 +98,52 @@ func TestLocationBlockUsesLongConnectionSettings(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServerBlockUsesConfiguredLongConnectionTimeout(t *testing.T) {
+	conf := generateServerBlock(&NginxParams{
+		Domain:                "node.example.com",
+		CertFile:              "/etc/vasmax/tls/fullchain.crt",
+		KeyFile:               "/etc/vasmax/tls/private.key",
+		LongConnectionTimeout: "172800s",
+		Protocols: []ProtocolLocation{
+			{Type: "ws", Path: "/vlessws", BackendPort: 31297},
+			{Type: "grpc", Path: "vlessgrpc", BackendPort: 31302},
+		},
+	})
+
+	for _, expected := range []string{
+		"proxy_read_timeout 172800s;",
+		"proxy_send_timeout 172800s;",
+		"grpc_read_timeout 172800s;",
+		"grpc_send_timeout 172800s;",
+	} {
+		if !strings.Contains(conf, expected) {
+			t.Fatalf("expected %q in generated config:\n%s", expected, conf)
+		}
+	}
+}
+
+func TestServerBlockUsesConfiguredSocketKeepAlive(t *testing.T) {
+	conf := generateServerBlock(&NginxParams{
+		Domain:   "example.com",
+		CertFile: "/etc/ssl/cert.pem",
+		KeyFile:  "/etc/ssl/key.pem",
+		Connection: config.ConnectionConfig{
+			KeepAliveMode:            "auto",
+			KeepAliveIdleSeconds:     8,
+			KeepAliveIntervalSeconds: 8,
+			KeepAliveProbes:          3,
+		},
+	})
+
+	for _, expected := range []string{
+		"listen 80 so_keepalive=8s:8s:3;",
+		"listen 443 ssl so_keepalive=8s:8s:3;",
+	} {
+		if !strings.Contains(conf, expected) {
+			t.Fatalf("expected %q in generated config:\n%s", expected, conf)
+		}
 	}
 }

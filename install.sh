@@ -120,6 +120,14 @@ install_self_script() {
     fi
 }
 
+write_config_reference() {
+    if [[ -x "${INSTALL_PATH}" ]]; then
+        "${INSTALL_PATH}" -c "${CONFIG_FILE}" --write-config-reference >/dev/null 2>&1 \
+            && green "配置参考文件已生成: ${CONFIG_DIR}/config.reference.yaml" \
+            || yellow "配置参考文件生成失败，可稍后运行: ${INSTALL_PATH} --write-config-reference"
+    fi
+}
+
 # --- systemd 服务 ---
 setup_service() {
     # Alpine 使用 OpenRC，不支持 systemd
@@ -171,6 +179,8 @@ ALIAS
 # --- 写入默认配置 ---
 write_default_config() {
     cat > "${CONFIG_FILE}" << YAML
+# VasmaX 主配置文件，可由 vasmax 菜单自动更新。
+# 完整字段说明见同目录 config.reference.yaml；请勿在此文件保存重要手写注释。
 standalone: true
 log:
   level: info
@@ -184,6 +194,21 @@ lang: zh
 protocols: []
 core_type: dual
 monitoring_enabled: true
+subscription:
+  dns_mode: auto
+  test_url: https://www.gstatic.com/generate_204
+nginx:
+  long_connection_timeout: 86400s
+sync:
+  empty_users_apply_threshold: 3
+  min_pull_interval_seconds: 30
+  min_push_interval_seconds: 30
+connection:
+  keepalive_mode: auto
+  keepalive_idle_seconds: 8
+  keepalive_interval_seconds: 8
+  keepalive_probes: 3
+  websocket_heartbeat_seconds: 8
 YAML
     chmod 600 "${CONFIG_FILE}"
 }
@@ -453,6 +478,7 @@ do_install() {
     init_dirs
     install_self_script
     download_binary
+    write_config_reference
     setup_service
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX
@@ -495,6 +521,7 @@ do_update() {
         systemctl stop VasmaX 2>/dev/null || true
     fi
     download_binary
+    write_config_reference
     "${INSTALL_PATH}" --version >/dev/null
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX

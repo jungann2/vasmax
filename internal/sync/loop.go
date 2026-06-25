@@ -37,6 +37,9 @@ type Loop struct {
 	logger         *logrus.Logger
 	auditLog       *audit.Logger
 	xrayStats      *traffic.XrayStatsCollector
+	emptyUserPulls int
+	configDirty    bool
+	configDirtyWhy string
 }
 
 // NewLoop 创建同步循环
@@ -67,6 +70,13 @@ func NewLoop(
 	}
 }
 
+// MarkConfigDirty forces the next successful user sync to rebuild core configs
+// even when the user list itself did not change.
+func (l *Loop) MarkConfigDirty(reason string) {
+	l.configDirty = true
+	l.configDirtyWhy = reason
+}
+
 // Start 启动同步循环，使用 time.Ticker 按间隔执行
 func (l *Loop) Start(ctx context.Context, pullInterval, pushInterval time.Duration) {
 	pullTicker := time.NewTicker(pullInterval)
@@ -78,6 +88,8 @@ func (l *Loop) Start(ctx context.Context, pullInterval, pushInterval time.Durati
 		"pull_interval": pullInterval,
 		"push_interval": pushInterval,
 	}).Info("同步循环已启动")
+
+	l.loadCachedUsersIntoManager()
 
 	// 启动时立即执行一次同步，不等待第一个 tick
 	if err := l.pullUsers(ctx); err != nil {
@@ -106,18 +118,24 @@ func (l *Loop) Start(ctx context.Context, pullInterval, pushInterval time.Durati
 
 // RunOnce 执行一次完整同步（手动触发）
 func (l *Loop) RunOnce(ctx context.Context) error {
+	l.loadCachedUsersIntoManager()
+	var errs []error
 	if err := l.pullUsers(ctx); err != nil {
 		l.logger.WithError(err).Error("手动同步: 拉取用户失败")
+		errs = append(errs, err)
 	}
 	if err := l.pushData(ctx); err != nil {
 		l.logger.WithError(err).Error("手动同步: 上报数据失败")
-		return err
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	l.logger.Info("手动同步完成")
 	return nil
 }
 
-// pullUsers 拉取用户列表 → 原子替换 UserTable → 重新生成配置 → 重载核心
+// pullUsers 拉取用户列表 → 必要时重新生成配置 → 原子替换 UserTable → 重载核心
 func (l *Loop) pullUsers(ctx context.Context) error {
 	users, err := l.apiClient.FetchUsers()
 	if err != nil {
@@ -125,13 +143,45 @@ func (l *Loop) pullUsers(ctx context.Context) error {
 	}
 	if users == nil {
 		// 304 未修改
+		if !l.configDirty {
+			return nil
+		}
+		cachedUsers := apiUsersFromEntries(l.userManager.GetAllUsers())
+		if len(cachedUsers) == 0 {
+			l.logger.WithField("reason", l.configDirtyWhy).Warn("节点配置已变化，但没有可用缓存用户，暂不重建核心配置")
+			return nil
+		}
+		users = cachedUsers
+		l.logger.WithFields(logrus.Fields{
+			"count":  len(users),
+			"reason": l.configDirtyWhy,
+		}).Info("用户列表未变化但节点配置已变化，使用缓存用户重建核心配置")
+	}
+
+	if err := validateManagedUsers(users); err != nil {
+		return err
+	}
+
+	existing := l.userManager.GetAllUsers()
+	if l.shouldDeferEmptyUsers(existing, users) {
 		return nil
 	}
 
-	if managedUsersEqual(l.userManager.GetAllUsers(), users) {
+	if managedUsersEqual(existing, users) && !l.configDirty {
 		l.cacheUsers(users)
 		l.logger.WithField("count", len(users)).Debug("用户列表未变化，跳过配置重载")
 		return nil
+	}
+
+	if managedCoreUsersEqual(existing, users) && !l.configDirty {
+		l.userManager.UpdateUsers(users)
+		l.cacheUsers(users)
+		l.logger.WithField("count", len(users)).Info("用户状态字段已更新，核心用户未变化，跳过配置重载")
+		return nil
+	}
+
+	if l.configDirty {
+		l.logger.WithField("reason", l.configDirtyWhy).Info("节点配置已变化，强制重建核心配置")
 	}
 
 	// 先确认配置可完整生成，再切换内存用户表；避免配置生成失败时内存状态
@@ -150,7 +200,11 @@ func (l *Loop) pullUsers(ctx context.Context) error {
 	// 重载核心
 	if err := l.reloadCores(); err != nil {
 		l.logger.WithError(err).Error("重载核心失败")
+		l.MarkConfigDirty("previous core reload failed")
+		return err
 	}
+	l.configDirty = false
+	l.configDirtyWhy = ""
 
 	l.logger.WithField("count", len(users)).Info("用户列表已同步")
 
@@ -166,6 +220,51 @@ func (l *Loop) pullUsers(ctx context.Context) error {
 	return nil
 }
 
+func (l *Loop) loadCachedUsersIntoManager() {
+	if len(l.userManager.GetAllUsers()) > 0 {
+		return
+	}
+	users, err := l.LoadCachedUsers()
+	if err != nil {
+		l.logger.WithError(err).Debug("未加载到托管用户缓存")
+		return
+	}
+	if err := validateManagedUsers(users); err != nil {
+		l.logger.WithError(err).Warn("托管用户缓存无效，已忽略")
+		return
+	}
+	if len(users) == 0 {
+		return
+	}
+	l.userManager.UpdateUsers(users)
+	l.logger.WithField("count", len(users)).Info("已加载托管用户缓存，避免启动时无变化重载")
+}
+
+func (l *Loop) shouldDeferEmptyUsers(existing []*user.UserEntry, next []api.User) bool {
+	threshold := l.config.Sync.EmptyUsersApplyThreshold
+	if threshold <= 0 || len(existing) == 0 || len(next) > 0 {
+		l.emptyUserPulls = 0
+		return false
+	}
+
+	l.emptyUserPulls++
+	if l.emptyUserPulls < threshold {
+		l.logger.WithFields(logrus.Fields{
+			"existing_count": len(existing),
+			"attempt":        l.emptyUserPulls,
+			"threshold":      threshold,
+		}).Warn("API 返回空用户列表，疑似临时异常，保留当前运行配置")
+		return true
+	}
+
+	l.logger.WithFields(logrus.Fields{
+		"existing_count": len(existing),
+		"threshold":      threshold,
+	}).Warn("API 连续返回空用户列表，达到阈值后应用空用户列表")
+	l.emptyUserPulls = 0
+	return false
+}
+
 // regenerateConfigs 根据当前用户列表重新生成所有协议配置文件
 func (l *Loop) regenerateConfigs(users []api.User) error {
 	apiUsers := make([]*api.User, len(users))
@@ -174,6 +273,8 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 	}
 
 	var errs []error
+	writes := make([]configWrite, 0, len(l.config.Protocols))
+	writeTargets := make(map[string]struct{}, len(l.config.Protocols))
 
 	// 按核心类型分组已安装协议
 	for _, protoName := range l.config.Protocols {
@@ -214,6 +315,7 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 			ServiceName:   protocol.DefaultGRPCServiceName(p),
 			TLSMinVersion: l.config.TLS.MinVersion,
 			TLSMaxVersion: l.config.TLS.MaxVersion,
+			KeepAlive:     l.config.Connection,
 		}
 		if l.nodeConfig != nil && p.Name() == "anytls" {
 			params.PaddingScheme = l.nodeConfig.PaddingScheme
@@ -254,13 +356,35 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		}
 
 		confPath := filepath.Join(confDir, fileName)
-		if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
-			l.logger.WithError(err).Errorf("写入 %s 配置失败", confPath)
-			errs = append(errs, fmt.Errorf("%s: write %s: %w", protoName, confPath, err))
+		if _, exists := writeTargets[confPath]; exists {
+			errs = append(errs, fmt.Errorf("%s: duplicate config target %s", protoName, confPath))
+			continue
 		}
+		writeTargets[confPath] = struct{}{}
+
+		data, err := json.MarshalIndent(wrapper, "", "  ")
+		if err != nil {
+			l.logger.WithError(err).Errorf("序列化 %s 配置失败", protoName)
+			errs = append(errs, fmt.Errorf("%s: marshal %s: %w", protoName, confPath, err))
+			continue
+		}
+		if !json.Valid(data) {
+			errs = append(errs, fmt.Errorf("%s: marshaled config is not valid JSON: %s", protoName, confPath))
+			continue
+		}
+
+		writes = append(writes, configWrite{path: confPath, data: data, perm: 0644})
 	}
 
-	return errors.Join(errs...)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	if err := applyConfigWrites(writes); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func managedUsersEqual(existing []*user.UserEntry, next []api.User) bool {
@@ -296,6 +420,161 @@ func managedUsersEqual(existing []*user.UserEntry, next []api.User) bool {
 	}
 
 	return true
+}
+
+func managedCoreUsersEqual(existing []*user.UserEntry, next []api.User) bool {
+	if len(existing) != len(next) {
+		return false
+	}
+
+	byID := make(map[int]*user.UserEntry, len(existing))
+	for _, entry := range existing {
+		if entry == nil {
+			return false
+		}
+		if _, exists := byID[entry.ID]; exists {
+			return false
+		}
+		byID[entry.ID] = entry
+	}
+
+	for _, apiUser := range next {
+		entry, ok := byID[apiUser.ID]
+		if !ok {
+			return false
+		}
+		if entry.UUID != apiUser.UUID {
+			return false
+		}
+	}
+
+	return true
+}
+
+func apiUsersFromEntries(entries []*user.UserEntry) []api.User {
+	users := make([]api.User, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		u := api.User{
+			ID:   entry.ID,
+			UUID: entry.UUID,
+		}
+		if entry.SpeedLimit > 0 {
+			limit := entry.SpeedLimit
+			u.SpeedLimit = &limit
+		}
+		if entry.DeviceLimit > 0 {
+			limit := entry.DeviceLimit
+			u.DeviceLimit = &limit
+		}
+		users = append(users, u)
+	}
+	return users
+}
+
+type configWrite struct {
+	path string
+	data []byte
+	perm os.FileMode
+}
+
+type configWriteBackup struct {
+	path   string
+	exists bool
+	data   []byte
+	perm   os.FileMode
+}
+
+func applyConfigWrites(writes []configWrite) error {
+	backups := make(map[string]configWriteBackup, len(writes))
+	for _, write := range writes {
+		if write.path == "" {
+			return fmt.Errorf("config write path must not be empty")
+		}
+		if _, exists := backups[write.path]; exists {
+			return fmt.Errorf("duplicate config write target: %s", write.path)
+		}
+
+		backup := configWriteBackup{path: write.path}
+		info, err := os.Stat(write.path)
+		switch {
+		case err == nil:
+			if info.IsDir() {
+				return fmt.Errorf("config write target is a directory: %s", write.path)
+			}
+			data, readErr := os.ReadFile(write.path)
+			if readErr != nil {
+				return fmt.Errorf("backup config %s: %w", write.path, readErr)
+			}
+			backup.exists = true
+			backup.data = data
+			backup.perm = info.Mode().Perm()
+		case errors.Is(err, os.ErrNotExist):
+			backup.exists = false
+			backup.perm = write.perm
+		default:
+			return fmt.Errorf("stat config %s: %w", write.path, err)
+		}
+
+		backups[write.path] = backup
+	}
+
+	applied := make([]string, 0, len(writes))
+	for _, write := range writes {
+		if err := security.AtomicWrite(write.path, write.data, write.perm); err != nil {
+			rollbackErr := rollbackConfigWrites(applied, backups)
+			return errors.Join(fmt.Errorf("write config %s: %w", write.path, err), rollbackErr)
+		}
+		applied = append(applied, write.path)
+	}
+
+	return nil
+}
+
+func rollbackConfigWrites(paths []string, backups map[string]configWriteBackup) error {
+	var errs []error
+	for i := len(paths) - 1; i >= 0; i-- {
+		backup := backups[paths[i]]
+		if backup.exists {
+			perm := backup.perm
+			if perm == 0 {
+				perm = 0644
+			}
+			if err := security.AtomicWrite(backup.path, backup.data, perm); err != nil {
+				errs = append(errs, fmt.Errorf("restore %s: %w", backup.path, err))
+			}
+			continue
+		}
+		if err := os.Remove(backup.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove new config %s: %w", backup.path, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func validateManagedUsers(users []api.User) error {
+	ids := make(map[int]struct{}, len(users))
+	uuids := make(map[string]struct{}, len(users))
+	for i, u := range users {
+		if u.ID <= 0 {
+			return fmt.Errorf("user[%d].id must be > 0, got %d", i, u.ID)
+		}
+		if _, ok := ids[u.ID]; ok {
+			return fmt.Errorf("duplicate user id: %d", u.ID)
+		}
+		ids[u.ID] = struct{}{}
+
+		if err := security.ValidateUUID(u.UUID); err != nil {
+			return fmt.Errorf("user[%d].uuid invalid: %w", i, err)
+		}
+		if _, ok := uuids[u.UUID]; ok {
+			return fmt.Errorf("duplicate user uuid: %s", u.UUID)
+		}
+		uuids[u.UUID] = struct{}{}
+	}
+	return nil
 }
 
 func intPtrValue(v *int) int {

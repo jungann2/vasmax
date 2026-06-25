@@ -147,6 +147,45 @@ func TestValidatePath_Invalid(t *testing.T) {
 	}
 }
 
+// --- ValidateAPIPrefix tests ---
+
+func TestValidateAPIPrefix_Valid(t *testing.T) {
+	valid := []string{
+		"",
+		"api",
+		"/custom/node/",
+		"custom-api",
+		"custom_api",
+		"v1.2/api",
+	}
+	for _, prefix := range valid {
+		if err := ValidateAPIPrefix(prefix); err != nil {
+			t.Errorf("ValidateAPIPrefix(%q) returned error: %v", prefix, err)
+		}
+	}
+}
+
+func TestValidateAPIPrefix_Invalid(t *testing.T) {
+	invalid := []struct {
+		prefix string
+		desc   string
+	}{
+		{"https://panel.example.com/api", "full https url"},
+		{"http://panel.example.com/api", "full http url"},
+		{"//panel.example.com/api", "protocol-relative url"},
+		{"custom node", "space"},
+		{"custom?node=1", "query"},
+		{"custom#node", "fragment"},
+		{"../api", "parent path segment"},
+		{"custom//node", "empty path segment"},
+	}
+	for _, tc := range invalid {
+		if err := ValidateAPIPrefix(tc.prefix); err == nil {
+			t.Errorf("ValidateAPIPrefix(%q) [%s] expected error, got nil", tc.prefix, tc.desc)
+		}
+	}
+}
+
 // --- ValidateURL tests ---
 
 func TestValidateURL_Valid(t *testing.T) {

@@ -43,6 +43,7 @@ func (a *AnyTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error)
 	if len(params.PaddingScheme) > 0 {
 		inbound["padding_scheme"] = params.PaddingScheme
 	}
+	applySingBoxTCPKeepAlive(inbound, params)
 	return json.Marshal(inbound)
 }
 

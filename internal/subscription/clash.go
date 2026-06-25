@@ -29,6 +29,10 @@ func GenerateClashProxies(protocols []protocol.Protocol, users []*api.User, info
 
 // GenerateClashBasic 生成基础 ClashMeta 配置（proxies + proxy-groups）
 func GenerateClashBasic(proxies []map[string]interface{}) ([]byte, error) {
+	return GenerateClashBasicWithOptions(proxies, DefaultProfileOptions())
+}
+
+func GenerateClashBasicWithOptions(proxies []map[string]interface{}, options ProfileOptions) ([]byte, error) {
 	proxyNames := make([]string, 0, len(proxies))
 	for _, p := range proxies {
 		if name, ok := p["name"].(string); ok {
@@ -48,7 +52,7 @@ func GenerateClashBasic(proxies []map[string]interface{}) ([]byte, error) {
 				"name":     "自动选择",
 				"type":     "url-test",
 				"proxies":  proxyNames,
-				"url":      "https://www.gstatic.com/generate_204",
+				"url":      normalizeTestURL(options.TestURL),
 				"interval": 300,
 			},
 		},

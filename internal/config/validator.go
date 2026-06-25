@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"vasmax/internal/security"
@@ -14,6 +15,8 @@ var validLogLevels = map[string]bool{
 	"warn":  true,
 	"error": true,
 }
+
+var nginxDurationRegex = regexp.MustCompile(`^[1-9][0-9]*(ms|s|m|h|d)$`)
 
 // Validate checks the Config for completeness and correctness.
 // In standalone mode only local fields are validated.
@@ -30,12 +33,18 @@ func (c *Config) Validate() error {
 	if !c.Standalone {
 		if c.APIHost == "" {
 			errs = append(errs, "api_host: must not be empty in managed mode")
-		} else if err := security.ValidateURL(c.APIHost); err != nil {
+		} else if err := security.ValidateHTTPURL(c.APIHost); err != nil {
 			errs = append(errs, fmt.Sprintf("api_host: %v", err))
 		}
 
 		if c.APIToken == "" {
 			errs = append(errs, "api_token: must not be empty in managed mode")
+		}
+
+		if c.APIPrefix != "" {
+			if err := security.ValidateAPIPrefix(c.APIPrefix); err != nil {
+				errs = append(errs, fmt.Sprintf("api_prefix: %v", err))
+			}
 		}
 
 		if c.NodeID <= 0 {
@@ -130,9 +139,70 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// 12. Validate subscription DNS mode if set.
+	if c.Subscription.DNSMode != "" {
+		validDNSModes := map[string]bool{"auto": true, "cn": true, "global": true, "privacy": true, "custom": true}
+		if !validDNSModes[c.Subscription.DNSMode] {
+			errs = append(errs, fmt.Sprintf("subscription.dns_mode: must be one of auto/cn/global/privacy/custom, got %q", c.Subscription.DNSMode))
+		}
+		if c.Subscription.DNSMode == "custom" && !hasNonEmptyValue(c.Subscription.DNSCustom) {
+			errs = append(errs, "subscription.dns_custom: must not be empty when subscription.dns_mode is custom")
+		}
+	}
+	if c.Subscription.TestURL != "" {
+		if err := security.ValidateURL(c.Subscription.TestURL); err != nil {
+			errs = append(errs, fmt.Sprintf("subscription.test_url: %v", err))
+		}
+	}
+
+	// 13. Validate generated Nginx timeout if set.
+	if c.Nginx.LongConnectionTimeout != "" && !nginxDurationRegex.MatchString(c.Nginx.LongConnectionTimeout) {
+		errs = append(errs, fmt.Sprintf("nginx.long_connection_timeout: must be a positive duration with unit ms/s/m/h/d, got %q", c.Nginx.LongConnectionTimeout))
+	}
+
+	// 14. Validate managed-mode sync safety settings.
+	if c.Sync.EmptyUsersApplyThreshold < -1 {
+		errs = append(errs, fmt.Sprintf("sync.empty_users_apply_threshold: must be -1 or >= 0, got %d", c.Sync.EmptyUsersApplyThreshold))
+	}
+	if c.Sync.MinPullIntervalSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("sync.min_pull_interval_seconds: must be >= 0, got %d", c.Sync.MinPullIntervalSeconds))
+	}
+	if c.Sync.MinPushIntervalSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("sync.min_push_interval_seconds: must be >= 0, got %d", c.Sync.MinPushIntervalSeconds))
+	}
+
+	// 15. Validate low-level connection keepalive settings.
+	if c.Connection.KeepAliveMode != "" {
+		validKeepAliveModes := map[string]bool{"auto": true, "off": true}
+		if !validKeepAliveModes[c.Connection.KeepAliveMode] {
+			errs = append(errs, fmt.Sprintf("connection.keepalive_mode: must be auto or off, got %q", c.Connection.KeepAliveMode))
+		}
+	}
+	if c.Connection.KeepAliveIdleSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("connection.keepalive_idle_seconds: must be >= 0, got %d", c.Connection.KeepAliveIdleSeconds))
+	}
+	if c.Connection.KeepAliveIntervalSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("connection.keepalive_interval_seconds: must be >= 0, got %d", c.Connection.KeepAliveIntervalSeconds))
+	}
+	if c.Connection.KeepAliveProbes < 0 {
+		errs = append(errs, fmt.Sprintf("connection.keepalive_probes: must be >= 0, got %d", c.Connection.KeepAliveProbes))
+	}
+	if c.Connection.WebSocketHeartbeatSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("connection.websocket_heartbeat_seconds: must be >= 0, got %d", c.Connection.WebSocketHeartbeatSeconds))
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  %s", strings.Join(errs, "\n  "))
 	}
 
 	return nil
+}
+
+func hasNonEmptyValue(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }

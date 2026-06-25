@@ -37,6 +37,7 @@ func (n *Naive) GenerateInbound(params *InboundParams) (json.RawMessage, error) 
 			"key_path":         params.KeyFile,
 		},
 	}
+	applySingBoxTCPKeepAlive(inbound, params)
 	return json.Marshal(inbound)
 }
 

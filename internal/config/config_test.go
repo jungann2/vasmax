@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"vasmax/internal/security"
 
@@ -82,6 +83,39 @@ paths:
 	}
 	if cfg.Paths.NginxConf != "/etc/nginx/conf.d/" {
 		t.Errorf("expected default nginx_conf, got %s", cfg.Paths.NginxConf)
+	}
+	if cfg.Subscription.DNSMode != "auto" {
+		t.Errorf("expected default subscription dns_mode auto, got %s", cfg.Subscription.DNSMode)
+	}
+	if cfg.Subscription.TestURL != "https://www.gstatic.com/generate_204" {
+		t.Errorf("expected default subscription test_url, got %s", cfg.Subscription.TestURL)
+	}
+	if cfg.Nginx.LongConnectionTimeout != "86400s" {
+		t.Errorf("expected default nginx long_connection_timeout, got %s", cfg.Nginx.LongConnectionTimeout)
+	}
+	if cfg.Sync.EmptyUsersApplyThreshold != 3 {
+		t.Errorf("expected default sync empty_users_apply_threshold 3, got %d", cfg.Sync.EmptyUsersApplyThreshold)
+	}
+	if cfg.Sync.MinPullIntervalSeconds != 30 {
+		t.Errorf("expected default sync min_pull_interval_seconds 30, got %d", cfg.Sync.MinPullIntervalSeconds)
+	}
+	if cfg.Sync.MinPushIntervalSeconds != 30 {
+		t.Errorf("expected default sync min_push_interval_seconds 30, got %d", cfg.Sync.MinPushIntervalSeconds)
+	}
+	if cfg.Connection.KeepAliveMode != "auto" {
+		t.Errorf("expected default connection keepalive_mode auto, got %s", cfg.Connection.KeepAliveMode)
+	}
+	if cfg.Connection.KeepAliveIdleSeconds != 8 {
+		t.Errorf("expected default connection keepalive_idle_seconds 8, got %d", cfg.Connection.KeepAliveIdleSeconds)
+	}
+	if cfg.Connection.KeepAliveIntervalSeconds != 8 {
+		t.Errorf("expected default connection keepalive_interval_seconds 8, got %d", cfg.Connection.KeepAliveIntervalSeconds)
+	}
+	if cfg.Connection.KeepAliveProbes != 3 {
+		t.Errorf("expected default connection keepalive_probes 3, got %d", cfg.Connection.KeepAliveProbes)
+	}
+	if cfg.Connection.WebSocketHeartbeatSeconds != 8 {
+		t.Errorf("expected default connection websocket_heartbeat_seconds 8, got %d", cfg.Connection.WebSocketHeartbeatSeconds)
 	}
 }
 
@@ -287,6 +321,214 @@ func TestSetDefaults_AllPaths(t *testing.T) {
 	}
 	if cfg.Paths.NginxConf != "/etc/nginx/conf.d/" {
 		t.Errorf("unexpected nginx_conf default: %s", cfg.Paths.NginxConf)
+	}
+	if cfg.Subscription.DNSMode != "auto" {
+		t.Errorf("unexpected subscription dns_mode default: %s", cfg.Subscription.DNSMode)
+	}
+	if cfg.Subscription.TestURL != "https://www.gstatic.com/generate_204" {
+		t.Errorf("unexpected subscription test_url default: %s", cfg.Subscription.TestURL)
+	}
+	if cfg.Nginx.LongConnectionTimeout != "86400s" {
+		t.Errorf("unexpected nginx long_connection_timeout default: %s", cfg.Nginx.LongConnectionTimeout)
+	}
+	if cfg.Sync.EmptyUsersApplyThreshold != 3 {
+		t.Errorf("unexpected sync empty_users_apply_threshold default: %d", cfg.Sync.EmptyUsersApplyThreshold)
+	}
+	if cfg.Sync.MinPullIntervalSeconds != 30 {
+		t.Errorf("unexpected sync min_pull_interval_seconds default: %d", cfg.Sync.MinPullIntervalSeconds)
+	}
+	if cfg.Sync.MinPushIntervalSeconds != 30 {
+		t.Errorf("unexpected sync min_push_interval_seconds default: %d", cfg.Sync.MinPushIntervalSeconds)
+	}
+	if cfg.Connection.KeepAliveMode != "auto" {
+		t.Errorf("unexpected connection keepalive_mode default: %s", cfg.Connection.KeepAliveMode)
+	}
+	if cfg.Connection.KeepAliveIdleSeconds != 8 {
+		t.Errorf("unexpected connection keepalive_idle_seconds default: %d", cfg.Connection.KeepAliveIdleSeconds)
+	}
+	if cfg.Connection.KeepAliveIntervalSeconds != 8 {
+		t.Errorf("unexpected connection keepalive_interval_seconds default: %d", cfg.Connection.KeepAliveIntervalSeconds)
+	}
+	if cfg.Connection.KeepAliveProbes != 3 {
+		t.Errorf("unexpected connection keepalive_probes default: %d", cfg.Connection.KeepAliveProbes)
+	}
+	if cfg.Connection.WebSocketHeartbeatSeconds != 8 {
+		t.Errorf("unexpected connection websocket_heartbeat_seconds default: %d", cfg.Connection.WebSocketHeartbeatSeconds)
+	}
+}
+
+func TestValidate_SubscriptionDNSMode(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Subscription: SubscriptionConfig{
+			DNSMode: "bad-mode",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid dns_mode error")
+	}
+
+	cfg.Subscription.DNSMode = "custom"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected custom dns mode without dns_custom to fail")
+	}
+
+	cfg.Subscription.DNSCustom = []string{"   "}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected custom dns mode with blank dns_custom to fail")
+	}
+
+	cfg.Subscription.DNSCustom = []string{"https://dns.example/dns-query"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected custom dns mode with dns_custom to pass: %v", err)
+	}
+
+	cfg.Subscription.TestURL = "http://example.com/generate_204"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected non-https test_url to fail")
+	}
+}
+
+func TestValidate_NginxLongConnectionTimeout(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Nginx:      NginxConfig{LongConnectionTimeout: "172800s"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid nginx long_connection_timeout to pass: %v", err)
+	}
+
+	cfg.Nginx.LongConnectionTimeout = "172800"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected nginx long_connection_timeout without unit to fail")
+	}
+}
+
+func TestValidate_SyncEmptyUsersApplyThreshold(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Sync:       SyncConfig{EmptyUsersApplyThreshold: -1},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected -1 empty_users_apply_threshold to disable protection: %v", err)
+	}
+
+	cfg.Sync.EmptyUsersApplyThreshold = -2
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected empty_users_apply_threshold below -1 to fail")
+	}
+}
+
+func TestValidate_SyncMinIntervals(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Sync: SyncConfig{
+			MinPullIntervalSeconds: 30,
+			MinPushIntervalSeconds: 30,
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid sync min intervals to pass: %v", err)
+	}
+
+	cfg.Sync.MinPullIntervalSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative min_pull_interval_seconds to fail")
+	}
+
+	cfg.Sync.MinPullIntervalSeconds = 30
+	cfg.Sync.MinPushIntervalSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative min_push_interval_seconds to fail")
+	}
+}
+
+func TestValidate_ConnectionKeepAlive(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Connection: ConnectionConfig{
+			KeepAliveMode:             "auto",
+			KeepAliveIdleSeconds:      8,
+			KeepAliveIntervalSeconds:  8,
+			KeepAliveProbes:           3,
+			WebSocketHeartbeatSeconds: 8,
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid connection keepalive config to pass: %v", err)
+	}
+
+	cfg.Connection.KeepAliveMode = "bad"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid keepalive_mode to fail")
+	}
+
+	cfg.Connection.KeepAliveMode = "auto"
+	cfg.Connection.KeepAliveIdleSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative keepalive_idle_seconds to fail")
+	}
+
+	cfg.Connection.KeepAliveIdleSeconds = 8
+	cfg.Connection.KeepAliveIntervalSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative keepalive_interval_seconds to fail")
+	}
+
+	cfg.Connection.KeepAliveIntervalSeconds = 8
+	cfg.Connection.KeepAliveProbes = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative keepalive_probes to fail")
+	}
+
+	cfg.Connection.KeepAliveProbes = 3
+	cfg.Connection.WebSocketHeartbeatSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative websocket_heartbeat_seconds to fail")
+	}
+}
+
+func TestSaveConfig_WritesReferenceHeader(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg := &Config{Standalone: true, Log: LogConfig{Level: "info"}}
+
+	if err := SaveConfig(cfgPath, cfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "config.reference.yaml") {
+		t.Fatalf("expected saved config to mention config.reference.yaml:\n%s", string(data))
+	}
+}
+
+func TestWriteReferenceConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	if err := WriteReferenceConfig(cfgPath); err != nil {
+		t.Fatalf("WriteReferenceConfig failed: %v", err)
+	}
+	refPath := ReferenceConfigPath(cfgPath)
+	data, err := os.ReadFile(refPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "long_connection_timeout") {
+		t.Fatalf("expected reference config to document long_connection_timeout:\n%s", string(data))
+	}
+
+	var parsed Config
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("reference config should be valid YAML: %v", err)
 	}
 }
 

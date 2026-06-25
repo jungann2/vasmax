@@ -27,6 +27,10 @@ func GenerateSingBoxOutbounds(protocols []protocol.Protocol, users []*api.User, 
 
 // GenerateSingBoxBasic 生成基础 sing-box 客户端配置
 func GenerateSingBoxBasic(outbounds []map[string]interface{}) ([]byte, error) {
+	return GenerateSingBoxBasicWithOptions(outbounds, DefaultProfileOptions())
+}
+
+func GenerateSingBoxBasicWithOptions(outbounds []map[string]interface{}, options ProfileOptions) ([]byte, error) {
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
 		if tag, ok := ob["tag"].(string); ok {
@@ -46,7 +50,7 @@ func GenerateSingBoxBasic(outbounds []map[string]interface{}) ([]byte, error) {
 			"type":      "urltest",
 			"tag":       "自动选择",
 			"outbounds": tags,
-			"url":       "https://www.gstatic.com/generate_204",
+			"url":       normalizeTestURL(options.TestURL),
 			"interval":  "3m",
 		},
 	}
@@ -70,6 +74,10 @@ func GenerateSingBoxBasic(outbounds []map[string]interface{}) ([]byte, error) {
 
 // GenerateSingBoxFullProfile 生成完整 sing-box 客户端配置
 func GenerateSingBoxFullProfile(outbounds []map[string]interface{}) ([]byte, error) {
+	return GenerateSingBoxFullProfileWithOptions(outbounds, DefaultProfileOptions())
+}
+
+func GenerateSingBoxFullProfileWithOptions(outbounds []map[string]interface{}, options ProfileOptions) ([]byte, error) {
 	tags := make([]string, 0, len(outbounds))
 	for _, ob := range outbounds {
 		if tag, ok := ob["tag"].(string); ok {
@@ -88,7 +96,7 @@ func GenerateSingBoxFullProfile(outbounds []map[string]interface{}) ([]byte, err
 			"type":      "urltest",
 			"tag":       "自动选择",
 			"outbounds": tags,
-			"url":       "https://www.gstatic.com/generate_204",
+			"url":       normalizeTestURL(options.TestURL),
 			"interval":  "3m",
 		},
 	}
@@ -103,15 +111,7 @@ func GenerateSingBoxFullProfile(outbounds []map[string]interface{}) ([]byte, err
 		"log": map[string]interface{}{
 			"level": "info",
 		},
-		"dns": map[string]interface{}{
-			"servers": []map[string]interface{}{
-				{"tag": "google", "address": "https://dns.google/dns-query", "detour": "手动切换"},
-				{"tag": "local", "address": "https://223.5.5.5/dns-query", "detour": "direct"},
-			},
-			"rules": []map[string]interface{}{
-				{"geosite": []string{"cn"}, "server": "local"},
-			},
-		},
+		"dns": options.DNS.singBoxDNS(),
 		"inbounds": []map[string]interface{}{
 			{
 				"type":          "tun",

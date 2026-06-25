@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.2.3 (2026-06-25)
+
+### Improvements
+- Xray 服务端 DNS 默认跟随系统解析，不再固定公共 DNS
+- 订阅 DNS 支持 auto/cn/global/privacy/custom 模式
+- 优化 Clash 与 sing-box 客户端订阅的 DNS 默认策略
+- 订阅自动测速 URL 支持配置
+- 新增完整配置参考文件，便于查看字段说明
+- Nginx 长连接超时支持配置，默认保持 24 小时
+- 增强托管同步保护，降低面板临时异常导致节点断流的概率
+- 优化 Xboard 下发配置的启动应用与同步间隔保护
+- 新增 TCP/WS 连接保活配置，缓解空闲连接被过早回收导致的断流
+
 ## v2.2.2 (2026-06-25)
 
 ### Improvements

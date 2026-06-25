@@ -152,7 +152,7 @@ func (m *RoutingMenu) blacklistMenu() {
 			}
 		}
 	case "2":
-		domain := ReadInput("请输入要阻断的域名")
+		domain := ReadInput("请输入要阻断的域名（只填域名，不要带 http:// 或 https://）")
 		if domain != "" {
 			if err := m.blMgr.Add(domain); err != nil {
 				PrintError(fmt.Sprintf("添加失败: %v", err))
@@ -161,7 +161,7 @@ func (m *RoutingMenu) blacklistMenu() {
 			}
 		}
 	case "3":
-		domain := ReadInput("请输入要移除的域名")
+		domain := ReadInput("请输入要移除的域名（只填域名，不要带 http:// 或 https://）")
 		if domain != "" {
 			if err := m.blMgr.Remove(domain); err != nil {
 				PrintError(fmt.Sprintf("删除失败: %v", err))

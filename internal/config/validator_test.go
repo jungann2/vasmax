@@ -72,7 +72,7 @@ func TestValidate_ManagedMode_MissingAPIHost(t *testing.T) {
 	}
 }
 
-func TestValidate_ManagedMode_InvalidAPIHostURL(t *testing.T) {
+func TestValidate_ManagedMode_HTTPAPIHostAllowed(t *testing.T) {
 	cfg := &Config{
 		Standalone: false,
 		APIHost:    "http://insecure.example.com",
@@ -80,12 +80,43 @@ func TestValidate_ManagedMode_InvalidAPIHostURL(t *testing.T) {
 		NodeID:     1,
 		Log:        LogConfig{Level: "info"},
 	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected http api_host to be allowed, got: %v", err)
+	}
+}
+
+func TestValidate_ManagedMode_InvalidAPIHostURL(t *testing.T) {
+	cfg := &Config{
+		Standalone: false,
+		APIHost:    "ftp://panel.example.com",
+		APIToken:   "token",
+		NodeID:     1,
+		Log:        LogConfig{Level: "info"},
+	}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("expected error for non-HTTPS api_host")
+		t.Fatal("expected error for unsupported api_host scheme")
 	}
 	if !strings.Contains(err.Error(), "api_host") {
 		t.Errorf("error should mention api_host, got: %v", err)
+	}
+}
+
+func TestValidate_ManagedMode_InvalidAPIPrefix(t *testing.T) {
+	cfg := &Config{
+		Standalone: false,
+		APIHost:    "https://panel.example.com",
+		APIToken:   "token",
+		APIPrefix:  "https://panel.example.com/api",
+		NodeID:     1,
+		Log:        LogConfig{Level: "info"},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for full URL api_prefix")
+	}
+	if !strings.Contains(err.Error(), "api_prefix") {
+		t.Errorf("error should mention api_prefix, got: %v", err)
 	}
 }
 

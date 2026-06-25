@@ -209,6 +209,21 @@ func genConfig() gopter.Gen {
 					Port:              vals2[1].(int),
 					CongestionControl: "bbr",
 				},
+				Nginx: NginxConfig{
+					LongConnectionTimeout: "86400s",
+				},
+				Sync: SyncConfig{
+					EmptyUsersApplyThreshold: 3,
+					MinPullIntervalSeconds:   30,
+					MinPushIntervalSeconds:   30,
+				},
+				Connection: ConnectionConfig{
+					KeepAliveMode:             "auto",
+					KeepAliveIdleSeconds:      8,
+					KeepAliveIntervalSeconds:  8,
+					KeepAliveProbes:           3,
+					WebSocketHeartbeatSeconds: 8,
+				},
 				// Use non-empty paths to avoid setDefaults() overwriting them
 				Paths: PathsConfig{
 					XrayConf:    "/custom/xray/conf/",
@@ -294,6 +309,18 @@ func TestProperty8_ConfigSaveLoadRoundTrip(t *testing.T) {
 				t.Logf("Tuic mismatch: %+v != %+v", original.Tuic, loaded.Tuic)
 				return false
 			}
+			if original.Nginx != loaded.Nginx {
+				t.Logf("Nginx mismatch: %+v != %+v", original.Nginx, loaded.Nginx)
+				return false
+			}
+			if original.Sync != loaded.Sync {
+				t.Logf("Sync mismatch: %+v != %+v", original.Sync, loaded.Sync)
+				return false
+			}
+			if original.Connection != loaded.Connection {
+				t.Logf("Connection mismatch: %+v != %+v", original.Connection, loaded.Connection)
+				return false
+			}
 			if original.Paths != loaded.Paths {
 				t.Logf("Paths mismatch: %+v != %+v", original.Paths, loaded.Paths)
 				return false
@@ -367,6 +394,21 @@ func genValidConfig() gopter.Gen {
 				Tuic: TuicConfig{
 					Port:              vals2[1].(int),
 					CongestionControl: "bbr",
+				},
+				Nginx: NginxConfig{
+					LongConnectionTimeout: "86400s",
+				},
+				Sync: SyncConfig{
+					EmptyUsersApplyThreshold: 3,
+					MinPullIntervalSeconds:   30,
+					MinPushIntervalSeconds:   30,
+				},
+				Connection: ConnectionConfig{
+					KeepAliveMode:             "auto",
+					KeepAliveIdleSeconds:      8,
+					KeepAliveIntervalSeconds:  8,
+					KeepAliveProbes:           3,
+					WebSocketHeartbeatSeconds: 8,
 				},
 				Paths: PathsConfig{
 					XrayConf:    "/custom/xray/conf/",

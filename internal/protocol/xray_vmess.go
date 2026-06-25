@@ -40,7 +40,7 @@ func (v *VMessWSTLS) GenerateInbound(params *InboundParams) (json.RawMessage, er
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VMessWSTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
@@ -156,7 +156,7 @@ func (v *VMessHTTPUpgradeTLS) GenerateInbound(params *InboundParams) (json.RawMe
 			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
-	return json.Marshal(inbound)
+	return marshalXrayInbound(inbound, params)
 }
 
 func (v *VMessHTTPUpgradeTLS) GenerateUserEntry(user *api.User) (json.RawMessage, error) {

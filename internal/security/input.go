@@ -26,6 +26,8 @@ var (
 
 	// uuidRegex matches RFC 4122 UUID format: 8-4-4-4-12 hex digits.
 	uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+	apiPrefixRegex = regexp.MustCompile(`^[a-zA-Z0-9._~/-]+$`)
 )
 
 // ValidateDomain validates a domain name per RFC 1035.
@@ -138,8 +140,57 @@ func ValidatePath(path string, allowedDirs []string) error {
 	return nil
 }
 
+// NormalizeAPIPrefix trims whitespace and surrounding slashes from a custom API path prefix.
+func NormalizeAPIPrefix(prefix string) string {
+	return strings.Trim(strings.TrimSpace(prefix), "/")
+}
+
+// ValidateAPIPrefix validates a custom Xboard API path prefix such as "api" or "custom/node".
+func ValidateAPIPrefix(prefix string) error {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil
+	}
+	if len(prefix) > MaxPathLength {
+		return fmt.Errorf("api prefix length %d exceeds maximum %d", len(prefix), MaxPathLength)
+	}
+	if strings.Contains(prefix, "://") || strings.HasPrefix(prefix, "//") {
+		return errors.New("api prefix must be a path prefix, not a full URL")
+	}
+	if strings.ContainsAny(prefix, " \t\r\n?#\\") {
+		return errors.New("api prefix contains invalid characters")
+	}
+
+	normalized := NormalizeAPIPrefix(prefix)
+	if normalized == "" {
+		return errors.New("api prefix must contain a path segment")
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == "" {
+			return errors.New("api prefix contains empty path segment")
+		}
+		if segment == "." || segment == ".." {
+			return errors.New("api prefix contains invalid path segment")
+		}
+	}
+	if !apiPrefixRegex.MatchString(prefix) {
+		return errors.New("api prefix contains invalid characters")
+	}
+
+	return nil
+}
+
 // ValidateURL validates a URL string. It must use the HTTPS scheme.
 func ValidateURL(rawURL string) error {
+	return validateURLWithSchemes(rawURL, map[string]bool{"https": true})
+}
+
+// ValidateHTTPURL validates a URL string that may use HTTP or HTTPS.
+func ValidateHTTPURL(rawURL string) error {
+	return validateURLWithSchemes(rawURL, map[string]bool{"http": true, "https": true})
+}
+
+func validateURLWithSchemes(rawURL string, allowedSchemes map[string]bool) error {
 	if len(rawURL) == 0 {
 		return errors.New("url must not be empty")
 	}
@@ -152,8 +203,8 @@ func ValidateURL(rawURL string) error {
 		return fmt.Errorf("url format is invalid: %w", err)
 	}
 
-	if parsed.Scheme != "https" {
-		return fmt.Errorf("url scheme must be https, got %q", parsed.Scheme)
+	if !allowedSchemes[parsed.Scheme] {
+		return fmt.Errorf("url scheme must be one of %s, got %q", strings.Join(sortedSchemeNames(allowedSchemes), "/"), parsed.Scheme)
 	}
 
 	if parsed.Host == "" {
@@ -161,4 +212,20 @@ func ValidateURL(rawURL string) error {
 	}
 
 	return nil
+}
+
+func sortedSchemeNames(schemes map[string]bool) []string {
+	names := make([]string, 0, len(schemes))
+	if schemes["http"] {
+		names = append(names, "http")
+	}
+	if schemes["https"] {
+		names = append(names, "https")
+	}
+	for name := range schemes {
+		if name != "http" && name != "https" {
+			names = append(names, name)
+		}
+	}
+	return names
 }

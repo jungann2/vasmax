@@ -9,11 +9,26 @@ import (
 // GenerateClashFullProfile 生成完整 ClashMeta 配置
 // 包含 DNS、proxy-providers、proxy-groups、rule-providers、rules、sniffer 等
 func GenerateClashFullProfile(proxies []map[string]interface{}, domain string) ([]byte, error) {
+	return GenerateClashFullProfileWithOptions(proxies, domain, DefaultProfileOptions())
+}
+
+func GenerateClashFullProfileWithOptions(proxies []map[string]interface{}, domain string, options ProfileOptions) ([]byte, error) {
 	proxyNames := make([]string, 0, len(proxies))
 	for _, p := range proxies {
 		if name, ok := p["name"].(string); ok {
 			proxyNames = append(proxyNames, name)
 		}
+	}
+
+	nameserver, fallback := options.DNS.clashServers()
+	dnsConfig := map[string]interface{}{
+		"enable":        true,
+		"enhanced-mode": "fake-ip",
+		"fake-ip-range": "198.18.0.1/16",
+		"nameserver":    nameserver,
+	}
+	if len(fallback) > 0 {
+		dnsConfig["fallback"] = fallback
 	}
 
 	config := map[string]interface{}{
@@ -22,19 +37,7 @@ func GenerateClashFullProfile(proxies []map[string]interface{}, domain string) (
 		"mode":                      "rule",
 		"log-level":                 "info",
 		"global-client-fingerprint": "chrome",
-		"dns": map[string]interface{}{
-			"enable":        true,
-			"enhanced-mode": "fake-ip",
-			"fake-ip-range": "198.18.0.1/16",
-			"nameserver": []string{
-				"https://dns.google/dns-query",
-				"https://cloudflare-dns.com/dns-query",
-			},
-			"fallback": []string{
-				"https://1.0.0.1/dns-query",
-				"https://8.8.4.4/dns-query",
-			},
-		},
+		"dns":                       dnsConfig,
 		"sniffer": map[string]interface{}{
 			"enable":         true,
 			"sniffing":       []string{"tls", "http"},
@@ -43,7 +46,7 @@ func GenerateClashFullProfile(proxies []map[string]interface{}, domain string) (
 			"port-whitelist": []int{443, 80},
 		},
 		"proxies":        proxies,
-		"proxy-groups":   buildClashProxyGroups(proxyNames),
+		"proxy-groups":   buildClashProxyGroups(proxyNames, normalizeTestURL(options.TestURL)),
 		"rule-providers": buildClashRuleProviders(),
 		"rules":          buildClashRules(),
 	}
@@ -56,7 +59,7 @@ func GenerateClashFullProfile(proxies []map[string]interface{}, domain string) (
 }
 
 // buildClashProxyGroups 构建 ClashMeta proxy-groups
-func buildClashProxyGroups(proxyNames []string) []map[string]interface{} {
+func buildClashProxyGroups(proxyNames []string, testURL string) []map[string]interface{} {
 	groups := []struct {
 		name    string
 		gtype   string
@@ -64,7 +67,7 @@ func buildClashProxyGroups(proxyNames []string) []map[string]interface{} {
 		extra   map[string]interface{}
 	}{
 		{"手动切换", "select", append([]string{"自动选择", "DIRECT"}, proxyNames...), nil},
-		{"自动选择", "url-test", proxyNames, map[string]interface{}{"url": "https://www.gstatic.com/generate_204", "interval": 300}},
+		{"自动选择", "url-test", proxyNames, map[string]interface{}{"url": testURL, "interval": 300}},
 		{"国外流量", "select", []string{"手动切换", "自动选择", "DIRECT"}, nil},
 		{"流媒体", "select", append([]string{"手动切换", "自动选择"}, proxyNames...), nil},
 		{"Telegram", "select", append([]string{"手动切换", "自动选择"}, proxyNames...), nil},

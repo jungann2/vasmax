@@ -207,8 +207,12 @@ func (m *ProtocolMenus) ShowReality() {
 		choice := ReadChoice("请选择", []string{"1", "2", "3"})
 		switch choice {
 		case "1":
-			dest := ReadInput("请输入新的伪装域名 (如 www.apple.com)")
+			dest := ReadInput("请输入新的伪装域名（只填域名或 域名:端口，不要带 http:// 或 https://，如 www.apple.com）")
 			if dest != "" {
+				if strings.Contains(dest, "://") {
+					PrintError("伪装域名不要带 http:// 或 https://")
+					continue
+				}
 				if !strings.Contains(dest, ":") {
 					dest = dest + ":443"
 				}
