@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const longConnectionTimeout = "86400s"
+
 // generateServerBlock generates the main Nginx server block configuration.
 func generateServerBlock(params *NginxParams) string {
 	var b strings.Builder
@@ -74,8 +76,10 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 		b.WriteString("        proxy_set_header Host $host;\n")
 		b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 		b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
-		b.WriteString("        proxy_read_timeout 300s;\n")
-		b.WriteString("        proxy_send_timeout 300s;\n")
+		b.WriteString("        proxy_buffering off;\n")
+		b.WriteString("        proxy_request_buffering off;\n")
+		b.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", longConnectionTimeout))
+		b.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", longConnectionTimeout))
 		b.WriteString("    }\n")
 
 	case "grpc":
@@ -83,8 +87,8 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 		b.WriteString(fmt.Sprintf("        grpc_pass grpc://127.0.0.1:%d;\n", backendPort))
 		b.WriteString("        grpc_set_header Host $host;\n")
 		b.WriteString("        grpc_set_header X-Real-IP $remote_addr;\n")
-		b.WriteString("        grpc_read_timeout 300s;\n")
-		b.WriteString("        grpc_send_timeout 300s;\n")
+		b.WriteString(fmt.Sprintf("        grpc_read_timeout %s;\n", longConnectionTimeout))
+		b.WriteString(fmt.Sprintf("        grpc_send_timeout %s;\n", longConnectionTimeout))
 		b.WriteString("    }\n")
 
 	case "httpupgrade":
@@ -96,6 +100,10 @@ func generateLocationBlock(protocolType, path string, backendPort int) string {
 		b.WriteString("        proxy_set_header Host $host;\n")
 		b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 		b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+		b.WriteString("        proxy_buffering off;\n")
+		b.WriteString("        proxy_request_buffering off;\n")
+		b.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", longConnectionTimeout))
+		b.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", longConnectionTimeout))
 		b.WriteString("    }\n")
 
 	default:

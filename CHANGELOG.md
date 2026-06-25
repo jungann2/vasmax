@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.2.2 (2026-06-25)
+
+### Improvements
+- 优化 WebSocket、HTTPUpgrade、gRPC 长连接稳定性
+- 将 Nginx 反代空闲超时调整为 24 小时
+- 关闭流式连接的代理缓冲，提升长任务体验
+
 ## v2.2.1 (2026-06-25)
 
 ### Improvements

@@ -46,3 +46,55 @@ func TestRemoveMarkedBlockMatchesLegacyByPath(t *testing.T) {
 		t.Fatalf("expected vlessws block preserved:\n%s", got)
 	}
 }
+
+func TestLocationBlockUsesLongConnectionSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      string
+		path     string
+		expected []string
+	}{
+		{
+			name: "websocket",
+			typ:  "ws",
+			path: "/vlessws",
+			expected: []string{
+				"proxy_read_timeout 86400s;",
+				"proxy_send_timeout 86400s;",
+				"proxy_buffering off;",
+				"proxy_request_buffering off;",
+			},
+		},
+		{
+			name: "httpupgrade",
+			typ:  "httpupgrade",
+			path: "/vmesshup",
+			expected: []string{
+				"proxy_read_timeout 86400s;",
+				"proxy_send_timeout 86400s;",
+				"proxy_buffering off;",
+				"proxy_request_buffering off;",
+			},
+		},
+		{
+			name: "grpc",
+			typ:  "grpc",
+			path: "vlessgrpc",
+			expected: []string{
+				"grpc_read_timeout 86400s;",
+				"grpc_send_timeout 86400s;",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block := generateLocationBlock(tt.typ, tt.path, 31297)
+			for _, expected := range tt.expected {
+				if !strings.Contains(block, expected) {
+					t.Fatalf("expected %q in block:\n%s", expected, block)
+				}
+			}
+		})
+	}
+}
