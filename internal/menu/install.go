@@ -200,40 +200,7 @@ func (m *InstallMenu) installCombination() {
 
 	// 端口设置：Nginx 反代协议自动分配内部端口，直连协议让用户确认/自定义
 	// portOverrides 存储用户自定义的端口（协议名 → 端口）
-	portOverrides := make(map[string]int)
-	if len(directProtos) > 0 {
-		fmt.Println()
-		PrintInfo("以下协议需要独立端口（非 Nginx 反代，客户端直连）:")
-		for _, p := range directProtos {
-			defPort := p.DefaultPort()
-			// Reality 协议端口单独处理
-			if strings.Contains(p.Name(), "reality") {
-				continue
-			}
-			PrintSuccess(fmt.Sprintf("  直接回车选择默认 %d", defPort))
-			input := ReadInput(fmt.Sprintf("%s 端口", p.Name()))
-			if input != "" {
-				var customPort int
-				if _, err := fmt.Sscanf(input, "%d", &customPort); err != nil || customPort < 1 || customPort > 65535 {
-					PrintError(fmt.Sprintf("端口无效，使用默认 %d", defPort))
-				} else {
-					portOverrides[p.Name()] = customPort
-				}
-			}
-		}
-		// Nginx 反代协议提示
-		hasNginxProto := false
-		for _, p := range selected {
-			if needsNginxProxy(p) {
-				hasNginxProto = true
-				break
-			}
-		}
-		if hasNginxProto {
-			PrintInfo("WS/gRPC/HTTPUpgrade 协议通过 Nginx 443 端口反代，无需设置端口")
-		}
-		fmt.Println()
-	}
+	portOverrides := promptDirectProtocolPorts(m.config, selected, directProtos)
 
 	// TLS 证书检测与申请（按域名去重，每个唯一域名只检测/申请一次）
 	// domainCerts 存储每个域名对应的证书路径
@@ -344,9 +311,6 @@ func (m *InstallMenu) installCombination() {
 			m.config.Reality.Dest = "www.microsoft.com:443"
 			m.config.Reality.ServerName = "www.microsoft.com"
 		}
-		if m.config.Reality.Port == 0 {
-			m.config.Reality.Port = 443
-		}
 	}
 
 	// 创建回滚快照
@@ -409,8 +373,10 @@ func (m *InstallMenu) installCombination() {
 		}
 		if customPort, ok := portOverrides[p.Name()]; ok {
 			m.config.ProtocolPorts[p.Name()] = customPort
+			m.syncProtocolSpecificPort(p.Name(), customPort)
 		} else {
 			m.config.ProtocolPorts[p.Name()] = p.DefaultPort()
+			m.syncProtocolSpecificPort(p.Name(), p.DefaultPort())
 		}
 
 		// 记录协议独立域名
@@ -462,6 +428,7 @@ func (m *InstallMenu) installCombination() {
 			params.Reality = &m.config.Reality
 			// 域名模式下不覆盖端口，使用各协议独立端口避免冲突
 		}
+		applyProtocolSpecificInboundParams(params, m.config, p.Name())
 
 		// 非 Reality、非 socks5 协议使用对应域名的 TLS 证书
 		if !strings.Contains(p.Name(), "reality") && p.Name() != "socks5" {
@@ -659,20 +626,14 @@ func (m *InstallMenu) installReality() {
 
 	PrintInfo("将自动生成 X25519 密钥对、ShortID 和默认用户")
 
-	// 0. 设置 Reality 监听端口
-	PrintSuccess("  直接回车选择默认 443")
-	portInput := ReadInput("请输入 Reality 监听端口（默认 443，阿里云建议 8443）")
-	realityPort := 443
-	if portInput != "" {
-		var p int
-		if _, err := fmt.Sscanf(portInput, "%d", &p); err != nil || p < 1 || p > 65535 {
-			PrintError("端口无效，使用默认 443")
-		} else {
-			realityPort = p
+	// 0. 设置直连协议监听端口
+	var directProtos []protocol.Protocol
+	for _, p := range selected {
+		if !needsNginxProxy(p) {
+			directProtos = append(directProtos, p)
 		}
 	}
-	m.config.Reality.Port = realityPort
-	PrintInfo(fmt.Sprintf("Reality 端口: %d", realityPort))
+	portOverrides := promptDirectProtocolPorts(m.config, selected, directProtos)
 
 	// 1. 安装 Xray-core
 	ctx := context.Background()
@@ -734,6 +695,17 @@ func (m *InstallMenu) installReality() {
 			m.config.ProtocolModes = make(map[string]string)
 		}
 		m.config.ProtocolModes[p.Name()] = "nodomain"
+
+		if m.config.ProtocolPorts == nil {
+			m.config.ProtocolPorts = make(map[string]int)
+		}
+		if customPort, ok := portOverrides[p.Name()]; ok {
+			m.config.ProtocolPorts[p.Name()] = customPort
+			m.syncProtocolSpecificPort(p.Name(), customPort)
+		} else {
+			m.config.ProtocolPorts[p.Name()] = p.DefaultPort()
+			m.syncProtocolSpecificPort(p.Name(), p.DefaultPort())
+		}
 	}
 
 	// 6. 自动创建默认用户（如果没有用户）
@@ -796,8 +768,12 @@ func (m *InstallMenu) installReality() {
 	}
 
 	for _, p := range selected {
+		port := p.DefaultPort()
+		if customPort, ok := portOverrides[p.Name()]; ok {
+			port = customPort
+		}
 		params := &protocol.InboundParams{
-			Port:      p.DefaultPort(),
+			Port:      port,
 			Users:     apiUsers,
 			Tag:       p.Name(),
 			Reality:   &m.config.Reality,
@@ -808,6 +784,7 @@ func (m *InstallMenu) installReality() {
 		if !strings.Contains(p.Name(), "reality") {
 			params.Reality = nil
 		}
+		applyProtocolSpecificInboundParams(params, m.config, p.Name())
 
 		// sing-box TLS 协议使用自签证书
 		if p.CoreType() == "singbox" && p.Name() != "socks5" {
@@ -949,6 +926,7 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
 		}
+		applyProtocolSpecificServerInfo(info, m.config, protoName)
 
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
 		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
@@ -1050,12 +1028,12 @@ func (m *InstallMenu) showRealityMenu() {
 		return
 	}
 	for {
-		PrintTitle("Reality 管理")
-		PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
-		PrintInfo(fmt.Sprintf("Dest: %s", m.config.Reality.Dest))
-		PrintInfo(fmt.Sprintf("端口: %d", m.config.Reality.EffectivePort()))
+		PrintTitle("Reality 参数管理")
+		PrintInfo(fmt.Sprintf("SNI ServerName: %s", m.config.Reality.ServerName))
+		PrintInfo(fmt.Sprintf("伪装目标 Dest: %s", m.config.Reality.Dest))
+		PrintInfo(fmt.Sprintf("监听端口: %s", formatRealityPorts(m.config)))
 		PrintSeparator()
-		PrintOption(1, "修改伪装域名")
+		PrintOption(1, "修改 Reality 伪装目标")
 		PrintOption(2, "查看密钥和连接信息")
 		PrintOption(3, "重新生成密钥对")
 		PrintOptionStr("0", "返回")
@@ -1185,6 +1163,7 @@ func (m *InstallMenu) showInstalled() {
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
 		}
+		applyProtocolSpecificServerInfo(info, m.config, protoName)
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
 		if mode == "nodomain" && p.CoreType() == "singbox" {
 			info.Domain = serverIP
@@ -1453,6 +1432,222 @@ func needsNginxProxy(p protocol.Protocol) bool {
 	return protocol.NeedsNginxProxy(p)
 }
 
+func (m *InstallMenu) syncProtocolSpecificPort(protoName string, port int) {
+	if port <= 0 {
+		return
+	}
+	switch protoName {
+	case "hysteria2":
+		m.config.Hysteria2.Port = port
+	case "tuic":
+		m.config.Tuic.Port = port
+	}
+}
+
+func applyProtocolSpecificInboundParams(params *protocol.InboundParams, cfg *config.Config, protoName string) {
+	if params == nil || cfg == nil {
+		return
+	}
+	switch protoName {
+	case "hysteria2":
+		params.Hysteria2 = &cfg.Hysteria2
+	case "tuic":
+		params.Tuic = &cfg.Tuic
+	}
+}
+
+func applyProtocolSpecificServerInfo(info *protocol.ServerInfo, cfg *config.Config, protoName string) {
+	if info == nil || cfg == nil {
+		return
+	}
+	if protoName == "tuic" {
+		info.Tuic = &cfg.Tuic
+	}
+}
+
+func promptDirectProtocolPorts(cfg *config.Config, allSelected, directProtos []protocol.Protocol) map[string]int {
+	portOverrides := make(map[string]int)
+	if len(directProtos) == 0 {
+		return portOverrides
+	}
+
+	fmt.Println()
+	PrintInfo("以下协议需要独立端口（非 Nginx 反代，客户端直连；每个端口不能重复）:")
+	usedPorts := make(map[int]string)
+	selectedNames := make(map[string]bool)
+	directNames := make(map[string]bool)
+	for _, p := range allSelected {
+		selectedNames[p.Name()] = true
+	}
+	for _, p := range directProtos {
+		directNames[p.Name()] = true
+	}
+
+	reservePort := func(port int, owner string) {
+		if port > 0 {
+			usedPorts[port] = owner
+		}
+	}
+	if hasNginxProxyProtocol(cfg, allSelected) {
+		reservePort(80, "Nginx HTTP")
+		reservePort(443, "Nginx HTTPS")
+	}
+	reservePort(10085, "Xray Stats API")
+
+	for _, p := range allSelected {
+		if directNames[p.Name()] {
+			continue
+		}
+		reservePort(configuredProtocolPort(cfg, p.Name(), p.DefaultPort()), p.Name())
+	}
+	if cfg != nil {
+		for _, protoName := range cfg.Protocols {
+			if selectedNames[protoName] {
+				continue
+			}
+			reservePort(configuredProtocolPort(cfg, protoName, defaultProtocolPort(protoName)), protoName)
+		}
+	}
+
+	for _, p := range directProtos {
+		defPort := configuredProtocolPort(cfg, p.Name(), p.DefaultPort())
+		for {
+			PrintSuccess(fmt.Sprintf("  %s 直接回车选择当前/默认 %d", p.Name(), defPort))
+			input := ReadInput(fmt.Sprintf("%s 监听端口（只填数字，不要加 http:// 或 https://）", p.Name()))
+
+			port := defPort
+			if input != "" {
+				var customPort int
+				if _, err := fmt.Sscanf(input, "%d", &customPort); err != nil || customPort < 1 || customPort > 65535 {
+					PrintError(fmt.Sprintf("端口无效，使用默认 %d", defPort))
+				} else {
+					port = customPort
+				}
+			}
+
+			if owner, exists := usedPorts[port]; exists {
+				PrintError(fmt.Sprintf("端口 %d 已被 %s 使用，请为 %s 换一个端口", port, owner, p.Name()))
+				continue
+			}
+
+			usedPorts[port] = p.Name()
+			if port != defPort {
+				portOverrides[p.Name()] = port
+			}
+			PrintInfo(fmt.Sprintf("%s 将监听端口: %d", p.Name(), port))
+			break
+		}
+	}
+
+	for _, p := range allSelected {
+		if needsNginxProxy(p) {
+			PrintInfo("WS/gRPC/HTTPUpgrade 协议通过 Nginx 443 端口反代，无需单独设置公网端口")
+			break
+		}
+	}
+	fmt.Println()
+
+	return portOverrides
+}
+
+func formatRealityPorts(cfg *config.Config) string {
+	if cfg == nil {
+		return "未配置"
+	}
+
+	var parts []string
+	for _, name := range cfg.Protocols {
+		if !strings.Contains(name, "reality") {
+			continue
+		}
+		port := configuredProtocolPort(cfg, name, defaultProtocolPort(name))
+		parts = append(parts, fmt.Sprintf("%s=%d", name, port))
+	}
+
+	if len(parts) == 0 {
+		if cfg.Reality.Port > 0 {
+			return fmt.Sprintf("%d", cfg.Reality.Port)
+		}
+		return "未安装 Reality 协议"
+	}
+	return strings.Join(parts, "，")
+}
+
+func configuredProtocolPort(cfg *config.Config, name string, fallback int) int {
+	if cfg != nil && cfg.ProtocolPorts != nil {
+		if configured, ok := cfg.ProtocolPorts[name]; ok && configured > 0 {
+			return configured
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 0
+}
+
+func hasNginxProxyProtocol(cfg *config.Config, selected []protocol.Protocol) bool {
+	for _, p := range selected {
+		if needsNginxProxy(p) {
+			return true
+		}
+	}
+	if cfg == nil {
+		return false
+	}
+	for _, protoName := range cfg.Protocols {
+		if protocolNameNeedsNginx(protoName) {
+			return true
+		}
+	}
+	return false
+}
+
+func protocolNameNeedsNginx(name string) bool {
+	switch name {
+	case "vless_ws_tls", "vless_grpc_tls", "trojan_grpc_tls", "vmess_ws_tls", "vmess_httpupgrade_tls":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultProtocolPort(name string) int {
+	switch name {
+	case "vless_tcp_tls_vision":
+		return 31296
+	case "vless_ws_tls":
+		return 31297
+	case "vless_grpc_tls":
+		return 31298
+	case "trojan_tcp_tls":
+		return 31299
+	case "trojan_grpc_tls":
+		return 31300
+	case "vmess_ws_tls":
+		return 31301
+	case "vmess_httpupgrade_tls":
+		return 31302
+	case "anytls":
+		return 31303
+	case "naive":
+		return 31304
+	case "vless_reality_vision":
+		return 31305
+	case "vless_reality_grpc":
+		return 31306
+	case "vless_reality_xhttp":
+		return 31307
+	case "hysteria2":
+		return 10080
+	case "tuic":
+		return 10081
+	case "socks5":
+		return 10082
+	default:
+		return 0
+	}
+}
+
 // externalPort 返回协议的外部端口（客户端连接用）
 // Nginx 反代协议外部端口为 443，其他协议使用自身端口
 func externalPort(p protocol.Protocol) int {
@@ -1714,6 +1909,7 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 		if strings.Contains(protoName, "reality") {
 			info.Reality = &m.config.Reality
 		}
+		applyProtocolSpecificServerInfo(info, m.config, protoName)
 
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
 		if mode == "nodomain" && p.CoreType() == "singbox" {

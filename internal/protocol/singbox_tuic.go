@@ -60,7 +60,7 @@ func (t *Tuic) GenerateUserEntry(user *api.User) (json.RawMessage, error) {
 func (t *Tuic) GenerateURI(user *api.User, info *ServerInfo) string {
 	params := url.Values{}
 	params.Set("sni", info.Domain)
-	params.Set("congestion_control", "bbr")
+	params.Set("congestion_control", tuicCongestionControl(info))
 	params.Set("alpn", "h3")
 	params.Set("udp_relay_mode", "native")
 	// 自签证书（无域名模式，Domain 是 IP）需要 insecure=1
@@ -72,7 +72,7 @@ func (t *Tuic) GenerateURI(user *api.User, info *ServerInfo) string {
 }
 
 func (t *Tuic) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":                  fmt.Sprintf("%s-tuic", info.Domain),
 		"type":                  "tuic",
 		"server":                info.Host,
@@ -81,21 +81,24 @@ func (t *Tuic) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]i
 		"password":              user.UUID,
 		"sni":                   info.Domain,
 		"alpn":                  []string{"h3"},
-		"congestion-controller": "bbr",
+		"congestion-controller": tuicCongestionControl(info),
 		"udp-relay-mode":        "native",
 		"client-fingerprint":    "chrome",
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (t *Tuic) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":               "tuic",
 		"tag":                fmt.Sprintf("%s-tuic", info.Domain),
 		"server":             info.Host,
 		"server_port":        info.Port,
 		"uuid":               user.UUID,
 		"password":           user.UUID,
-		"congestion_control": "bbr",
+		"congestion_control": tuicCongestionControl(info),
 		"udp_relay_mode":     "native",
 		"tls": map[string]interface{}{
 			"enabled":     true,
@@ -103,4 +106,13 @@ func (t *Tuic) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[str
 			"alpn":        []string{"h3"},
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
+}
+
+func tuicCongestionControl(info *ServerInfo) string {
+	if info != nil && info.Tuic != nil && info.Tuic.CongestionControl != "" {
+		return info.Tuic.CongestionControl
+	}
+	return "bbr"
 }

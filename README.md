@@ -1,17 +1,11 @@
-# vasmax
+# VasmaX
 
 <div align="center">
 
 ⚡ Xray-core / sing-box 十五合一管理脚本（Go 重构版）
-⚠️ 法律免责声明 / Legal Disclaimer
 
-本项目提供的 VLESS / VMess / AnyTLS 配置脚本及代码 仅供网络安全技术研究与学习交流使用。
+**Codex / AI 长任务连接专项优化版：针对 WebSocket/WSS 场景下打开或提问时反复出现 `Reconnecting...1/5` 到 `Reconnecting...5/5` 的问题，强化 Nginx 长连接、TCP/WS keepalive、Clash TUN/UDP 订阅兼容和托管同步稳定性，降低空闲断流与反复重连概率。**
 
-🚫 严禁将本工具用于任何商业牟利、私自搭建跨境代理节点进行售卖或提供非法访问服务。
-
-🚫 严禁利用本项目规避国家网络安全监管或从事违反当地法律法规的活动。
-
-使用者需对自身行为负责。作者不承担因滥用本工具而导致的任何法律责任、服务封禁或经济损失。
 [![GitHub](https://img.shields.io/badge/GitHub-VasmaX-181717?logo=github)](https://github.com/jungann2/vasmax)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
@@ -25,14 +19,14 @@
 |------|------|
 | [🛡️ Xboard-Plus](https://github.com/jungann2/Xboard-Plus) | 基于 Laravel 11 + Octane 的高性能面板系统，用户管理、订阅分发、流量统计一站式解决 |
 
-> 💡 **vasmax + Xboard-Plus 搭配使用，效果极佳。** VasmaX 负责节点部署、协议配置、证书管理，Xboard-Plus 负责用户管理、订阅分发、流量统计。两者对接后可实现：用户自动同步、流量实时统计、到期自动停用、多节点集中管理。从单机自用到多用户运营，一套方案全搞定。
+> 💡 **VasmaX + Xboard-Plus 搭配使用，效果极佳。** VasmaX 负责节点部署、协议配置、证书管理，Xboard-Plus 负责用户管理、订阅分发、流量统计。两者对接后可实现：用户自动同步、流量实时统计、到期自动停用、多节点集中管理。从单机自用到多用户运营，一套方案全搞定。
 
 ---
 
 ## 📖 简介
 
-vasmax（V2ray Agent Service Management Assistant X）是一个基于 Go 语言重构的多协议代理服务管理工具，支持 Xray-core 和 sing-box 双核心，提供 15 种协议组合的一键安装与管理。
-相比S-UI、3x-ui，核心极大的优化，面板更轻便，管理更容易，消除web面板的网络安全隐患问题。
+VasmaX（V2ray Agent Service Management Assistant X）是一个基于 Go 语言重构的多协议代理服务管理工具，支持 Xray-core 和 sing-box 双核心，提供 15 种协议组合的一键安装与管理。
+
 支持独立运行和 Xboard-Plus 面板托管两种模式。
 
 ## 支持协议（十五合一）
@@ -247,6 +241,7 @@ vasmax
 
 本项目参考了以下开源项目，感谢原作者的贡献：
 
+- [v2ray-agent](https://github.com/mack-a/v2ray-agent) - 原版八合一脚本
 - [anytls-go](https://github.com/anytls/anytls-go) - AnyTLS 协议实现
 - [Xray-core](https://github.com/XTLS/Xray-core) - VLESS/VMess/Trojan 核心
 - [sing-box](https://github.com/SagerNet/sing-box) - Hysteria2/Tuic/Naive/AnyTLS 核心

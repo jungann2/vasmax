@@ -215,6 +215,9 @@ func (m *Manager) buildServerInfoForProtocol(p protocol.Protocol, getIP func() s
 	if m.config.Reality.PrivateKey != "" {
 		info.Reality = &m.config.Reality
 	}
+	if p.Name() == "tuic" {
+		info.Tuic = &m.config.Tuic
+	}
 
 	return info
 }

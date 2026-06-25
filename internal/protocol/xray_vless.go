@@ -72,7 +72,7 @@ func (v *VlessTCPTLSVision) GenerateURI(user *api.User, info *ServerInfo) string
 }
 
 func (v *VlessTCPTLSVision) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-vless-vision", info.Domain),
 		"type":               "vless",
 		"server":             info.Host,
@@ -81,13 +81,17 @@ func (v *VlessTCPTLSVision) GenerateClashProxy(user *api.User, info *ServerInfo)
 		"tls":                true,
 		"servername":         info.Domain,
 		"flow":               "xtls-rprx-vision",
+		"network":            "tcp",
 		"client-fingerprint": "chrome",
 		"alpn":               []string{"h2", "http/1.1"},
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (v *VlessTCPTLSVision) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "vless",
 		"tag":         fmt.Sprintf("%s-vless-vision", info.Domain),
 		"server":      info.Host,
@@ -100,6 +104,8 @@ func (v *VlessTCPTLSVision) GenerateSingBoxOutbound(user *api.User, info *Server
 			"alpn":        []string{"h2", "http/1.1"},
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- VLESS+WS+TLS ---
@@ -160,7 +166,7 @@ func (v *VlessWSTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 
 func (v *VlessWSTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-vless-ws", info.Domain),
 		"type":               "vless",
 		"server":             host,
@@ -177,11 +183,14 @@ func (v *VlessWSTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[st
 			},
 		},
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (v *VlessWSTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "vless",
 		"tag":         fmt.Sprintf("%s-vless-ws", info.Domain),
 		"server":      host,
@@ -199,6 +208,8 @@ func (v *VlessWSTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) m
 			},
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- VLESS+gRPC+TLS ---
@@ -258,7 +269,7 @@ func (v *VlessGRPCTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 
 func (v *VlessGRPCTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-vless-grpc", info.Domain),
 		"type":               "vless",
 		"server":             host,
@@ -272,11 +283,14 @@ func (v *VlessGRPCTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[
 			"grpc-service-name": info.ServiceName,
 		},
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (v *VlessGRPCTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "vless",
 		"tag":         fmt.Sprintf("%s-vless-grpc", info.Domain),
 		"server":      host,
@@ -291,6 +305,8 @@ func (v *VlessGRPCTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo)
 			"service_name": info.ServiceName,
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- VLESS+Reality+Vision ---
@@ -373,6 +389,7 @@ func (v *VlessRealityVision) GenerateClashProxy(user *api.User, info *ServerInfo
 		"client-fingerprint": "chrome",
 		"network":            "tcp",
 	}
+	markClashUDP(m)
 	if info.Reality != nil {
 		m["servername"] = info.Reality.ServerName
 		m["reality-opts"] = map[string]interface{}{
@@ -494,6 +511,7 @@ func (v *VlessRealityGRPC) GenerateClashProxy(user *api.User, info *ServerInfo) 
 			"grpc-service-name": info.ServiceName,
 		},
 	}
+	markClashUDP(m)
 	if info.Reality != nil {
 		m["servername"] = info.Reality.ServerName
 		m["reality-opts"] = map[string]interface{}{
@@ -618,6 +636,7 @@ func (v *VlessRealityXHTTP) GenerateClashProxy(user *api.User, info *ServerInfo)
 			"path": info.Path,
 		},
 	}
+	markClashUDP(m)
 	if info.Reality != nil {
 		m["servername"] = info.Reality.ServerName
 		m["reality-opts"] = map[string]interface{}{

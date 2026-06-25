@@ -183,14 +183,18 @@ func (m *ToolsMenu) bbrMenu() {
 			PrintInfo(fmt.Sprintf("拥塞控制  : %s", Yellow(cc)))
 		}
 		PrintInfo(fmt.Sprintf("队列调度  : %s", bbr.CurrentQdisc()))
-		PrintInfo(fmt.Sprintf("可用算法  : %s", strings.Join(bbr.AvailableCC(), " ")))
+		availableCC := strings.Join(bbr.AvailableCC(), " ")
+		if availableCC == "" {
+			availableCC = "未知"
+		}
+		PrintInfo(fmt.Sprintf("可用算法  : %s", availableCC))
 
 		// ── 内核安装类 ──────────────────────────────────────────
 		fmt.Println()
 		PrintSectionTitle("内核安装类（需要重启）")
 		PrintOption(1, "安装 BBR 原版内核")
 		PrintOption(2, "安装 BBRplus 版内核")
-		PrintOption(3, "安装 Lotserver（锐速）内核")
+		PrintOption(3, "安装 Lotserver（锐速）内核/组件")
 		PrintOption(4, "安装 BBRplus 新版内核")
 		PrintOption(5, "安装 Zen 官方版内核")
 		PrintOption(6, "安装官方 cloud 内核")
@@ -204,15 +208,15 @@ func (m *ToolsMenu) bbrMenu() {
 		// ── 加速启用类 ──────────────────────────────────────────
 		fmt.Println()
 		PrintSectionTitle("加速启用类（无需重启）")
-		PrintOption(13, "BBR + FQ（推荐）")
-		PrintOption(14, "BBR + FQ_PIE")
+		PrintOption(13, "BBR + FQ（推荐*）")
+		PrintOption(14, "BBR + FQ_PIE（推荐）")
 		PrintOption(15, "BBR + CAKE")
-		PrintOption(16, "BBR2 + FQ")
+		PrintOption(16, "BBR2 + FQ（推荐）")
 		PrintOption(17, "BBR2 + FQ_PIE")
 		PrintOption(18, "BBR2 + CAKE")
 		PrintOption(19, "BBRplus + FQ")
-		PrintOption(20, "Lotserver（锐速）加速")
-		PrintOption(21, "编译安装 brutal 模块")
+		PrintOption(20, "运行 Lotserver（锐速）加速脚本")
+		PrintOption(21, "编译安装 brutal 模块（高级）")
 
 		// ── 系统配置类 ──────────────────────────────────────────
 		fmt.Println()
@@ -231,7 +235,7 @@ func (m *ToolsMenu) bbrMenu() {
 		PrintSectionTitle("内核管理类")
 		PrintOption(30, "查看已安装内核列表")
 		PrintOption(31, "删除/保留指定内核")
-		PrintOption(32, "卸载全部加速配置")
+		PrintOption(32, "卸载 BBR/系统优化配置（不改 IPv6）")
 
 		fmt.Println()
 		PrintOptionStr("0", "返回上级菜单")
@@ -299,9 +303,13 @@ func (m *ToolsMenu) handleBBRChoice(choice string) {
 			PrintError(fmt.Sprintf("启用失败: %v", err))
 			return
 		}
-		PrintSuccess(fmt.Sprintf("%s 已启用，重启后持续生效", mode.Label))
+		PrintSuccess(fmt.Sprintf("%s 已立即应用，并会在重启后持续生效", mode.Label))
 
 	case "20":
+		PrintWarning("Lotserver 会执行外部安装脚本，可能修改内核模块和网络加速配置")
+		if !Confirm("确认继续?") {
+			return
+		}
 		PrintInfo("正在安装 Lotserver（锐速）加速...")
 		if err := bbr.InstallLotserverAccel(); err != nil {
 			PrintError(fmt.Sprintf("安装失败: %v", err))
@@ -310,6 +318,10 @@ func (m *ToolsMenu) handleBBRChoice(choice string) {
 		PrintSuccess("Lotserver 加速已安装")
 
 	case "21":
+		PrintWarning("brutal 需要编译内核模块，可能依赖当前内核头文件和编译环境")
+		if !Confirm("确认继续?") {
+			return
+		}
 		PrintInfo("正在编译安装 brutal 模块，这可能需要几分钟...")
 		if err := bbr.InstallBrutal(); err != nil {
 			PrintError(fmt.Sprintf("安装失败: %v", err))
@@ -376,6 +388,8 @@ func (m *ToolsMenu) handleBBRChoice(choice string) {
 	case "29":
 		if err := bbr.EditSysctlFile(); err != nil {
 			PrintError(fmt.Sprintf("打开编辑器失败: %v", err))
+		} else {
+			PrintSuccess("内核参数已保存并重新加载")
 		}
 
 	// ── 内核管理类 30-32 ─────────────────────────────────────
@@ -416,6 +430,10 @@ func (m *ToolsMenu) handleBBRChoice(choice string) {
 			}
 		}
 		input := ReadInput("输入要保留的内核编号（多个用逗号分隔，如 1,3）")
+		if strings.TrimSpace(input) == "" {
+			PrintWarning("未输入要保留的内核编号，已取消删除")
+			return
+		}
 		keepSet := map[int]bool{}
 		for _, s := range strings.Split(input, ",") {
 			var n int
@@ -446,12 +464,15 @@ func (m *ToolsMenu) handleBBRChoice(choice string) {
 		if err := bbr.DeleteKernels(toDelete, distro); err != nil {
 			PrintError(fmt.Sprintf("删除失败: %v", err))
 		} else {
+			if err := bbr.UpdateGrub(distro); err != nil {
+				PrintWarning(fmt.Sprintf("更新 grub 失败: %v", err))
+			}
 			PrintSuccess("指定内核已删除")
 		}
 
 	case "32":
-		PrintWarning("此操作将删除所有 vasmax BBR/优化配置，恢复默认 cubic")
-		if !Confirm("确认卸载全部加速配置?") {
+		PrintWarning("此操作将删除 vasmax BBR/系统优化配置，恢复默认 cubic；不会修改 IPv6 开关")
+		if !Confirm("确认卸载 BBR/系统优化配置?") {
 			return
 		}
 		if err := bbr.DisableAll(); err != nil {

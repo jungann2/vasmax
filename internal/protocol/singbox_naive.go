@@ -59,7 +59,7 @@ func (n *Naive) GenerateURI(user *api.User, info *ServerInfo) string {
 
 func (n *Naive) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	// ClashMeta 不原生支持 naive，返回基础信息
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":     fmt.Sprintf("%s-naive", info.Domain),
 		"type":     "naive",
 		"server":   info.Host,
@@ -68,10 +68,12 @@ func (n *Naive) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]
 		"password": user.UUID,
 		"sni":      info.Domain,
 	}
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (n *Naive) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "naive",
 		"tag":         fmt.Sprintf("%s-naive", info.Domain),
 		"server":      info.Host,
@@ -83,4 +85,6 @@ func (n *Naive) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[st
 			"server_name": info.Domain,
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }

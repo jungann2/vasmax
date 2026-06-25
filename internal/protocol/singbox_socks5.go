@@ -52,7 +52,7 @@ func (s *Socks5) GenerateURI(user *api.User, info *ServerInfo) string {
 }
 
 func (s *Socks5) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":     fmt.Sprintf("%s-socks5", info.Domain),
 		"type":     "socks5",
 		"server":   info.Host,
@@ -60,6 +60,8 @@ func (s *Socks5) GenerateClashProxy(user *api.User, info *ServerInfo) map[string
 		"username": fmt.Sprintf("user_%d", user.ID),
 		"password": user.UUID,
 	}
+	markClashUDP(proxy)
+	return proxy
 }
 
 func (s *Socks5) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {

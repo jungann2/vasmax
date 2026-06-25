@@ -60,6 +60,7 @@ type ServerInfo struct {
 	Path        string
 	ServiceName string
 	Reality     *config.RealityConfig
+	Tuic        *config.TuicConfig
 }
 
 // Registry 协议注册表

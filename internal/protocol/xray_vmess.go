@@ -78,7 +78,7 @@ func (v *VMessWSTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 
 func (v *VMessWSTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-vmess-ws", info.Domain),
 		"type":               "vmess",
 		"server":             host,
@@ -97,11 +97,14 @@ func (v *VMessWSTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[st
 			},
 		},
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (v *VMessWSTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "vmess",
 		"tag":         fmt.Sprintf("%s-vmess-ws", info.Domain),
 		"server":      host,
@@ -121,6 +124,8 @@ func (v *VMessWSTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) m
 			},
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- VMess+HTTPUpgrade+TLS ---
@@ -194,7 +199,7 @@ func (v *VMessHTTPUpgradeTLS) GenerateURI(user *api.User, info *ServerInfo) stri
 
 func (v *VMessHTTPUpgradeTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-vmess-httpupgrade", info.Domain),
 		"type":               "vmess",
 		"server":             host,
@@ -211,11 +216,14 @@ func (v *VMessHTTPUpgradeTLS) GenerateClashProxy(user *api.User, info *ServerInf
 			"host": info.Domain,
 		},
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (v *VMessHTTPUpgradeTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "vmess",
 		"tag":         fmt.Sprintf("%s-vmess-httpupgrade", info.Domain),
 		"server":      host,
@@ -233,6 +241,8 @@ func (v *VMessHTTPUpgradeTLS) GenerateSingBoxOutbound(user *api.User, info *Serv
 			"host": info.Domain,
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- 辅助函数 ---

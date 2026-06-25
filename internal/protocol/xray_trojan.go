@@ -68,7 +68,7 @@ func (t *TrojanTCPTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 }
 
 func (t *TrojanTCPTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-trojan", info.Domain),
 		"type":               "trojan",
 		"server":             info.Host,
@@ -78,10 +78,13 @@ func (t *TrojanTCPTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[
 		"alpn":               []string{"h2", "http/1.1"},
 		"client-fingerprint": "chrome",
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (t *TrojanTCPTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "trojan",
 		"tag":         fmt.Sprintf("%s-trojan", info.Domain),
 		"server":      info.Host,
@@ -93,6 +96,8 @@ func (t *TrojanTCPTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo)
 			"alpn":        []string{"h2", "http/1.1"},
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- Trojan+gRPC+TLS ---
@@ -151,7 +156,7 @@ func (t *TrojanGRPCTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 
 func (t *TrojanGRPCTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-trojan-grpc", info.Domain),
 		"type":               "trojan",
 		"server":             host,
@@ -164,11 +169,14 @@ func (t *TrojanGRPCTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map
 			"grpc-service-name": info.ServiceName,
 		},
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (t *TrojanGRPCTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
 	host := effectiveHost(info)
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "trojan",
 		"tag":         fmt.Sprintf("%s-trojan-grpc", info.Domain),
 		"server":      host,
@@ -183,6 +191,8 @@ func (t *TrojanGRPCTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo
 			"service_name": info.ServiceName,
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }
 
 // --- 辅助函数 ---

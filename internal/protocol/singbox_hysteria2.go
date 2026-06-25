@@ -67,7 +67,7 @@ func (h *Hysteria2) GenerateURI(user *api.User, info *ServerInfo) string {
 }
 
 func (h *Hysteria2) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-hysteria2", info.Domain),
 		"type":               "hysteria2",
 		"server":             info.Host,
@@ -76,10 +76,13 @@ func (h *Hysteria2) GenerateClashProxy(user *api.User, info *ServerInfo) map[str
 		"sni":                info.Domain,
 		"client-fingerprint": "chrome",
 	}
+	markClashUDP(proxy)
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (h *Hysteria2) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "hysteria2",
 		"tag":         fmt.Sprintf("%s-hysteria2", info.Domain),
 		"server":      info.Host,
@@ -90,4 +93,6 @@ func (h *Hysteria2) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) ma
 			"server_name": info.Domain,
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }

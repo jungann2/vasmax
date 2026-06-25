@@ -223,10 +223,10 @@ func (m *MainMenu) printOptions() {
 	PrintOption(12, "核心管理（启动/停止/重启 Xray 和 sing-box）")
 	PrintOption(13, "Xboard-Plus 对接管理")
 	PrintOption(14, "TLS 证书管理")
-	PrintOption(15, "其他工具（BBR/伪装站管理/健康检查）")
+	PrintOption(15, "系统工具（BBR/Nginx 伪装站/健康检查）")
 	PrintOption(16, "实时监控")
 	PrintOption(17, "VasmaX 服务管理（启动/停止/重启/状态/日志）")
-	PrintOption(18, "协议专项管理（Reality/Hysteria2/TUIC 参数）")
+	PrintOption(18, "协议参数管理（Reality/Hysteria2/TUIC 专项参数）")
 	PrintOptionStr("0", "退出")
 	fmt.Println()
 }

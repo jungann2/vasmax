@@ -56,6 +56,9 @@ func ApplyOptimize(newScheme bool) error {
 			params[k] = v
 		}
 	}
+	if ecn, ok := readSysctlParam(SysctlOptConf, "net.ipv4.tcp_ecn"); ok {
+		params["net.ipv4.tcp_ecn"] = ecn
+	}
 
 	// 收集 key 并排序，确保配置文件内容稳定可预测
 	keys := make([]string, 0, len(params))
@@ -158,4 +161,26 @@ func appendSysctlParam(file, key, val string) error {
 	}
 
 	return os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+}
+
+func readSysctlParam(file, key string) (string, bool) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) != key {
+			continue
+		}
+		val := strings.TrimSpace(parts[1])
+		if val == "0" || val == "1" || val == "2" {
+			return val, true
+		}
+	}
+	return "", false
 }

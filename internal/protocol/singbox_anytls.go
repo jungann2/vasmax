@@ -71,7 +71,7 @@ func (a *AnyTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 }
 
 func (a *AnyTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	proxy := map[string]interface{}{
 		"name":               fmt.Sprintf("%s-anytls", info.Domain),
 		"type":               "anytls",
 		"server":             info.Host,
@@ -82,10 +82,12 @@ func (a *AnyTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string
 		"udp":                true,
 		"alpn":               []string{"h2", "http/1.1"},
 	}
+	markClashSkipCertVerify(proxy, info)
+	return proxy
 }
 
 func (a *AnyTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[string]interface{} {
-	return map[string]interface{}{
+	outbound := map[string]interface{}{
 		"type":        "anytls",
 		"tag":         fmt.Sprintf("%s-anytls", info.Domain),
 		"server":      info.Host,
@@ -96,4 +98,6 @@ func (a *AnyTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[s
 			"server_name": info.Domain,
 		},
 	}
+	markSingBoxTLSInsecure(outbound, info)
+	return outbound
 }

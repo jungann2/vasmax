@@ -35,7 +35,7 @@ func (m *ProtocolMenus) Show() {
 		idx := 1
 		if m.hasRealityProtocol() {
 			key := fmt.Sprintf("%d", idx)
-			PrintOption(idx, "Reality 管理（伪装域名、Reality 密钥）")
+			PrintOption(idx, "Reality 参数（伪装目标/SNI、Reality 密钥）")
 			handlers[key] = m.ShowReality
 			idx++
 		}
@@ -99,7 +99,8 @@ func (m *ProtocolMenus) hasRealityProtocol() bool {
 func (m *ProtocolMenus) ShowHysteria2() {
 	for {
 		PrintTitle("Hysteria2 管理")
-		PrintInfo(fmt.Sprintf("端口: %d", m.config.Hysteria2.Port))
+		hysteriaPort := configuredProtocolPort(m.config, "hysteria2", defaultProtocolPort("hysteria2"))
+		PrintInfo(fmt.Sprintf("端口: %d", hysteriaPort))
 		if m.config.Hysteria2.HopStart > 0 {
 			PrintInfo(fmt.Sprintf("端口跳跃: %d-%d", m.config.Hysteria2.HopStart, m.config.Hysteria2.HopEnd))
 		}
@@ -133,10 +134,11 @@ func (m *ProtocolMenus) hysteria2PortHop() {
 	switch choice {
 	case "1":
 		start, end := firewall.DefaultPortHopRange()
+		targetPort := configuredProtocolPort(m.config, "hysteria2", defaultProtocolPort("hysteria2"))
 		cfg := &firewall.PortHopConfig{
 			StartPort:  start,
 			EndPort:    end,
-			TargetPort: m.config.Hysteria2.Port,
+			TargetPort: targetPort,
 			Protocol:   "udp",
 		}
 		if err := m.firewallMgr.SetupPortHopping(cfg); err != nil {
@@ -145,14 +147,15 @@ func (m *ProtocolMenus) hysteria2PortHop() {
 			m.config.Hysteria2.HopStart = start
 			m.config.Hysteria2.HopEnd = end
 			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
-			PrintSuccess(fmt.Sprintf("端口跳跃已启用: %d-%d -> %d", start, end, m.config.Hysteria2.Port))
+			PrintSuccess(fmt.Sprintf("端口跳跃已启用: %d-%d -> %d", start, end, targetPort))
 		}
 	case "2":
 		if m.config.Hysteria2.HopStart > 0 {
+			targetPort := configuredProtocolPort(m.config, "hysteria2", defaultProtocolPort("hysteria2"))
 			cfg := &firewall.PortHopConfig{
 				StartPort:  m.config.Hysteria2.HopStart,
 				EndPort:    m.config.Hysteria2.HopEnd,
-				TargetPort: m.config.Hysteria2.Port,
+				TargetPort: targetPort,
 				Protocol:   "udp",
 			}
 			_ = m.firewallMgr.RemovePortHopping(cfg)
@@ -189,17 +192,19 @@ func (m *ProtocolMenus) hysteria2Speed() {
 		PrintError(fmt.Sprintf("保存失败: %v", err))
 	} else {
 		PrintSuccess("速度配置已更新")
+		PrintWarning("需重新安装/更新 Hysteria2 配置并重启 sing-box 后生效")
 	}
 }
 
 // ShowReality displays the Reality management menu.
 func (m *ProtocolMenus) ShowReality() {
 	for {
-		PrintTitle("Reality 管理")
-		PrintInfo(fmt.Sprintf("Dest: %s", m.config.Reality.Dest))
-		PrintInfo(fmt.Sprintf("ServerName: %s", m.config.Reality.ServerName))
+		PrintTitle("Reality 参数管理")
+		PrintInfo(fmt.Sprintf("伪装目标 Dest: %s", m.config.Reality.Dest))
+		PrintInfo(fmt.Sprintf("SNI ServerName: %s", m.config.Reality.ServerName))
+		PrintInfo(fmt.Sprintf("监听端口: %s", formatRealityPorts(m.config)))
 		PrintSeparator()
-		PrintOption(1, "修改伪装域名")
+		PrintOption(1, "修改 Reality 伪装目标")
 		PrintOption(2, "查看密钥信息")
 		PrintOption(3, "重新生成密钥对")
 		PrintOptionStr("0", "返回")
@@ -260,7 +265,12 @@ func (m *ProtocolMenus) ShowReality() {
 func (m *ProtocolMenus) ShowTuic() {
 	for {
 		PrintTitle("Tuic 管理")
-		PrintInfo(fmt.Sprintf("端口: %d  拥塞控制: %s", m.config.Tuic.Port, m.config.Tuic.CongestionControl))
+		tuicPort := configuredProtocolPort(m.config, "tuic", defaultProtocolPort("tuic"))
+		cc := m.config.Tuic.CongestionControl
+		if cc == "" {
+			cc = "bbr"
+		}
+		PrintInfo(fmt.Sprintf("端口: %d  拥塞控制: %s", tuicPort, cc))
 		PrintSeparator()
 		PrintOption(1, "修改拥塞控制算法")
 		PrintOptionStr("0", "返回")
@@ -285,6 +295,7 @@ func (m *ProtocolMenus) ShowTuic() {
 			}
 			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
 			PrintSuccess("拥塞控制算法已更新")
+			PrintWarning("需重新安装/更新 TUIC 配置并重启 sing-box 后生效")
 		case "0":
 			return
 		}

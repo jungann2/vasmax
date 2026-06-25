@@ -20,10 +20,10 @@ type CCMode struct {
 
 // 预定义的加速模式
 var CCModes = []CCMode{
-	{Qdisc: "fq", CC: "bbr", Label: "BBR + FQ（推荐）"},
-	{Qdisc: "fq_pie", CC: "bbr", Label: "BBR + FQ_PIE"},
+	{Qdisc: "fq", CC: "bbr", Label: "BBR + FQ（推荐*）"},
+	{Qdisc: "fq_pie", CC: "bbr", Label: "BBR + FQ_PIE（推荐）"},
 	{Qdisc: "cake", CC: "bbr", Label: "BBR + CAKE"},
-	{Qdisc: "fq", CC: "bbr2", Label: "BBR2 + FQ"},
+	{Qdisc: "fq", CC: "bbr2", Label: "BBR2 + FQ（推荐）"},
 	{Qdisc: "fq_pie", CC: "bbr2", Label: "BBR2 + FQ_PIE"},
 	{Qdisc: "cake", CC: "bbr2", Label: "BBR2 + CAKE"},
 	{Qdisc: "fq", CC: "bbrplus", Label: "BBRplus + FQ"},
@@ -98,13 +98,12 @@ func SetCC(mode CCMode) error {
 	return nil
 }
 
-// DisableAll 卸载全部加速配置，恢复默认 cubic
-// 注意：此操作会同时删除 BBR 配置和系统优化配置（包括 ECN 设置）
+// DisableAll 卸载 BBR/系统优化配置，恢复默认 cubic。
+// IPv6 是独立网络开关，不在此处修改。
 func DisableAll() error {
-	// 删除所有 vasmax sysctl 配置文件
+	// 删除 vasmax BBR/优化 sysctl 配置文件。
 	_ = os.Remove(SysctlBBRConf)
 	_ = os.Remove(SysctlOptConf)
-	_ = os.Remove(SysctlIPv6Conf)
 
 	// 立即恢复 cubic 和默认 qdisc
 	if err := exec.Command("sysctl", "-w", "net.ipv4.tcp_congestion_control=cubic").Run(); err != nil {
