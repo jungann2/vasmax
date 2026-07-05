@@ -110,7 +110,7 @@ func validateRedirectInput(sourcePath, targetURL string) error {
 		return fmt.Errorf("source path must start with /")
 	}
 	if strings.Contains(sourcePath, "..") {
-		return fmt.Errorf("source path must not contain ..")
+		return fmt.Errorf("source path must not contain parent directory segments")
 	}
 	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 		return fmt.Errorf("target URL must start with http:// or https://")

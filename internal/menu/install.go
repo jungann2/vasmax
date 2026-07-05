@@ -139,12 +139,6 @@ func (m *InstallMenu) logWarn(err error, msg string) {
 	}
 }
 
-func (m *InstallMenu) logWarnf(err error, format string, args ...interface{}) {
-	if m.logger != nil {
-		m.logger.WithError(err).Warnf(format, args...)
-	}
-}
-
 func tlsConfigForDomain(base config.TLSConfig, domain string) config.TLSConfig {
 	out := config.TLSConfig{
 		Domain:     domain,
@@ -1301,12 +1295,6 @@ func resolveDisplayServerIP(cfg *config.Config) (string, error) {
 	return displayServerIPPlaceholder, fmt.Errorf("公网 IP 自动探测失败，请设置 subscription.server_ip: %w", err)
 }
 
-// getServerIP 获取服务器公网 IP。保留给旧路径兜底；新菜单展示应使用 resolveDisplayServerIP。
-func getServerIP() string {
-	ip, _ := resolveDisplayServerIP(nil)
-	return ip
-}
-
 func detectPublicServerIP() (string, error) {
 	apis := []string{
 		"https://api.ipify.org",
@@ -2130,12 +2118,6 @@ func defaultProtocolPort(name string) int {
 	}
 }
 
-// externalPort 返回协议的外部端口（客户端连接用）
-// Nginx 反代协议外部端口为 443，其他协议使用自身端口
-func externalPort(p protocol.Protocol) int {
-	return protocol.ExternalPort(p, nil)
-}
-
 // externalPortWithConfig 返回协议的外部端口（优先使用配置中的自定义端口）
 func externalPortWithConfig(p protocol.Protocol, cfg *config.Config) int {
 	return protocol.ExternalPort(p, cfg)
@@ -2467,105 +2449,6 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 	}
 }
 
-// autoConfigNginx 安装协议后自动配置 Nginx 反向代理
-func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain string) error {
-	// 收集需要 Nginx 反代的协议
-	var locations []nginx.ProtocolLocation
-	for _, p := range installed {
-		if !needsNginxProxy(p) {
-			continue
-		}
-		transport := p.TransportType()
-		loc := nginx.ProtocolLocation{
-			Type:        transport,
-			BackendPort: configuredProtocolPort(m.config, p.Name(), p.DefaultPort()),
-		}
-		if transport == "grpc" {
-			loc.Path = defaultGRPCServiceName(p)
-		} else {
-			loc.Path = defaultWSPath(p)
-		}
-		locations = append(locations, loc)
-	}
-
-	if len(locations) == 0 {
-		return nil
-	}
-
-	// 需要域名和证书
-	if domain == "" {
-		return fmt.Errorf("未配置域名，无法生成 Nginx 反代配置")
-	}
-
-	certFile := m.config.TLS.CertFile
-	keyFile := m.config.TLS.KeyFile
-	if !strings.EqualFold(strings.TrimSpace(m.config.TLS.Domain), strings.TrimSpace(domain)) {
-		certFile = ""
-		keyFile = ""
-	}
-	if certFile == "" || keyFile == "" {
-		// 尝试检测证书路径
-		tlsCfg := tlsConfigForDomain(m.config.TLS, domain)
-		certFile, keyFile = config.DetectCertPath(&tlsCfg)
-	}
-	if certFile == "" || keyFile == "" {
-		return fmt.Errorf("未找到 %s 的 TLS 证书，请先通过 TLS 证书管理申请证书", domain)
-	}
-
-	// 检测 Nginx 版本，如果太旧则自动升级
-	if nginx.NeedUpgrade() {
-		oldVer := nginx.NginxVersionString()
-		PrintWarning(fmt.Sprintf("Nginx 版本过低（%s），需要 1.25.1+ 才支持 http2 指令", oldVer))
-		PrintInfo("正在自动升级 Nginx 到最新稳定版...")
-		if err := nginx.UpgradeNginx(); err != nil {
-			return fmt.Errorf("Nginx 升级失败: %w", err)
-		}
-		newVer := nginx.NginxVersionString()
-		PrintSuccess(fmt.Sprintf("Nginx 已升级: %s → %s", oldVer, newVer))
-	}
-
-	PrintInfo("正在自动配置 Nginx 反向代理...")
-
-	params := &nginx.NginxParams{
-		Domain:                domain,
-		CertFile:              certFile,
-		KeyFile:               keyFile,
-		Protocols:             locations,
-		LongConnectionTimeout: m.config.Nginx.LongConnectionTimeout,
-		Connection:            m.config.Connection,
-	}
-
-	tx := m.nginxMgr.BeginConfigTransaction()
-	if err := tx.GenerateConfig(params); err != nil {
-		return fmt.Errorf("生成 Nginx 配置失败: %w", err)
-	}
-	if err := tx.Reload(); err != nil {
-		return fmt.Errorf("Nginx 重载失败，请手动检查 Nginx 配置 nginx -t: %w", err)
-	}
-
-	// 配置订阅路径
-	subTx := m.nginxMgr.BeginConfigTransaction()
-	if err := subTx.SetupSubscribeServer(domain); err != nil {
-		if m.logger != nil {
-			m.logWarn(err, "配置订阅路径失败")
-		}
-	} else if err := subTx.Reload(); err != nil {
-		if m.logger != nil {
-			m.logWarn(err, "重载订阅路径失败")
-		}
-	}
-
-	PrintSuccess("Nginx 反向代理已自动配置")
-	for _, loc := range locations {
-		if loc.Type == "grpc" {
-			PrintInfo(fmt.Sprintf("  %s → grpc://127.0.0.1:%d/%s", loc.Type, loc.BackendPort, loc.Path))
-		} else {
-			PrintInfo(fmt.Sprintf("  %s → http://127.0.0.1:%d%s", loc.Type, loc.BackendPort, loc.Path))
-		}
-	}
-	return nil
-}
-
 func domainNeedsNginxProxy(installed []protocol.Protocol, protocolDomains map[string]string, domain string) bool {
 	for _, p := range installed {
 		if needsNginxProxy(p) && protocolDomains[p.Name()] == domain {
@@ -2626,7 +2509,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 		PrintWarning(fmt.Sprintf("Nginx 版本过低（%s），需要 1.25.1+ 才支持 http2 指令", oldVer))
 		PrintInfo("正在自动升级 Nginx 到最新稳定版...")
 		if err := nginx.UpgradeNginx(); err != nil {
-			return fmt.Errorf("Nginx 升级失败: %w", err)
+			return fmt.Errorf("nginx 升级失败: %w", err)
 		}
 		newVer := nginx.NginxVersionString()
 		PrintSuccess(fmt.Sprintf("Nginx 已升级: %s → %s", oldVer, newVer))
@@ -2670,7 +2553,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 
 	// 验证并重载 Nginx
 	if err := tx.Reload(); err != nil {
-		return fmt.Errorf("Nginx 重载失败，请手动检查 Nginx 配置 nginx -t: %w", err)
+		return fmt.Errorf("nginx 重载失败，请手动检查 Nginx 配置 nginx -t: %w", err)
 	}
 
 	for _, domain := range domainOrder {

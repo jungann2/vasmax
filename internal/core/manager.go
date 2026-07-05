@@ -439,11 +439,11 @@ func (m *Manager) MergeSingBoxConfig() error {
 func (m *Manager) TestXrayConfig() error {
 	m.syncConfiguredPaths()
 	if !fileExists(m.xray.BinaryPath) {
-		return fmt.Errorf("Xray binary not found: %s", m.xray.BinaryPath)
+		return fmt.Errorf("xray binary not found: %s", m.xray.BinaryPath)
 	}
 	output, err := exec.Command(m.xray.BinaryPath, "test", "-confdir", m.xray.ConfDir).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("Xray config test failed: %w: %s", err, commandOutputSnippet(output))
+		return fmt.Errorf("xray config test failed: %w: %s", err, commandOutputSnippet(output))
 	}
 	return nil
 }

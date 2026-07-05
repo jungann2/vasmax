@@ -92,14 +92,6 @@ func xrayDomainStrategy(strategy string) string {
 	}
 }
 
-func removeLegacyBaseDNSConfig(confDir string) error {
-	dnsPath := filepath.Join(confDir, "03_dns.json")
-	if err := os.Remove(dnsPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
 // EnsureBaseConfigs 确保 Xray 基础配置文件存在（outbound + dns）
 func EnsureBaseConfigs(confDir string, cfg ...*config.Config) error {
 	var dnsCfg []config.ServerDNSConfig

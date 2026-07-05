@@ -117,12 +117,6 @@ func (m *Manager) loadLocalUsers() error {
 	return nil
 }
 
-// saveLocalUsers 将本地用户持久化到文件
-func (m *Manager) saveLocalUsers() error {
-	table := m.users.Load().(*UserTable)
-	return m.saveLocalUsersTable(table)
-}
-
 func (m *Manager) saveLocalUsersTable(table *UserTable) error {
 	var users []localUserJSON
 	for _, e := range table.entries {

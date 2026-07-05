@@ -548,7 +548,7 @@ func UpgradeNginx() error {
 		startCmd := exec.Command("systemctl", "start", "nginx")
 		startOut, startErr := startCmd.CombinedOutput()
 		if startErr != nil {
-			return fmt.Errorf("Nginx 升级后启动失败: %s: %w", string(startOut), startErr)
+			return fmt.Errorf("nginx 升级后启动失败: %s: %w", string(startOut), startErr)
 		}
 		_ = restartOut // suppress unused
 	}
@@ -611,7 +611,7 @@ func upgradeNginxDebian() error {
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr
 	if err := installCmd.Run(); err != nil {
-		return fmt.Errorf("Nginx 升级失败: %w", err)
+		return fmt.Errorf("nginx 升级失败: %w", err)
 	}
 
 	return nil
@@ -635,7 +635,7 @@ module_hotfixes=true
 	installCmd.Stdout = os.Stdout
 	installCmd.Stderr = os.Stderr
 	if err := installCmd.Run(); err != nil {
-		return fmt.Errorf("Nginx 升级失败: %w", err)
+		return fmt.Errorf("nginx 升级失败: %w", err)
 	}
 
 	return nil

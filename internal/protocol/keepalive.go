@@ -25,13 +25,6 @@ func keepAliveInterval(cfg config.ConnectionConfig) int {
 	return 8
 }
 
-func keepAliveProbes(cfg config.ConnectionConfig) int {
-	if cfg.KeepAliveProbes > 0 {
-		return cfg.KeepAliveProbes
-	}
-	return 3
-}
-
 func webSocketHeartbeat(cfg config.ConnectionConfig) int {
 	if cfg.WebSocketHeartbeatSeconds > 0 {
 		return cfg.WebSocketHeartbeatSeconds

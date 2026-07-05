@@ -137,16 +137,6 @@ func TestProperty7_MonitoringEnabledDefaultTrue(t *testing.T) {
 	properties.TestingRun(t)
 }
 
-// genNonEmptyAlphaNum generates a non-empty alphanumeric string of length 3-20.
-func genNonEmptyAlphaNum() gopter.Gen {
-	return gen.RegexMatch(`[a-zA-Z0-9]{3,20}`)
-}
-
-// genFilePath generates a plausible file path string.
-func genFilePath() gopter.Gen {
-	return gen.RegexMatch(`/[a-z]{2,8}/[a-z]{2,8}/[a-z]{2,8}`)
-}
-
 // genLogLevel generates a random valid log level.
 func genLogLevel() gopter.Gen {
 	return gen.OneConstOf("debug", "info", "warn", "error")
