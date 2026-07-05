@@ -127,7 +127,8 @@ func GenerateSingBoxFullProfileWithOptions(outbounds []map[string]interface{}, o
 			"auto_detect_interface": true,
 			"rules": []map[string]interface{}{
 				{"protocol": "dns", "outbound": "dns-out"},
-				{"geosite": []string{"cn"}, "geoip": []string{"cn", "private"}, "outbound": "direct"},
+				{"geosite": []string{"cn"}, "outbound": "direct"},
+				{"geoip": []string{"cn", "private"}, "outbound": "direct"},
 			},
 		},
 	}

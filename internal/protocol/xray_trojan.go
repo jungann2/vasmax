@@ -24,7 +24,7 @@ func (t *TrojanTCPTLS) GenerateInbound(params *InboundParams) (json.RawMessage, 
 		"certificates": []map[string]interface{}{
 			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
 		},
-		"alpn": inboundALPN(params, defaultTLSALPN),
+		"alpn": inboundTLSALPN(params),
 	}
 	for k, val := range tlsVersionSettings(params) {
 		tlsSettings[k] = val
@@ -62,7 +62,7 @@ func (t *TrojanTCPTLS) GenerateURI(user *api.User, info *ServerInfo) string {
 	params.Set("type", "tcp")
 	params.Set("security", "tls")
 	params.Set("sni", info.Domain)
-	params.Set("alpn", alpnQueryValue(serverInfoALPN(info, defaultTLSALPN)))
+	params.Set("alpn", alpnQueryValue(serverInfoTLSALPN(info)))
 	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
 		url.PathEscape(fmt.Sprintf("%s-trojan", info.Domain)))
 }
@@ -75,7 +75,7 @@ func (t *TrojanTCPTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[
 		"port":               info.Port,
 		"password":           user.UUID,
 		"sni":                info.Domain,
-		"alpn":               serverInfoALPN(info, defaultTLSALPN),
+		"alpn":               serverInfoTLSALPN(info),
 		"client-fingerprint": "chrome",
 	}
 	markClashUDP(proxy)
@@ -93,7 +93,7 @@ func (t *TrojanTCPTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo)
 		"tls": map[string]interface{}{
 			"enabled":     true,
 			"server_name": info.Domain,
-			"alpn":        serverInfoALPN(info, defaultTLSALPN),
+			"alpn":        serverInfoTLSALPN(info),
 		},
 	}
 	markSingBoxTLSInsecure(outbound, info)

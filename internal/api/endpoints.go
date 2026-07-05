@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // buildURL 构建完整的 API URL（含查询参数）
@@ -30,9 +32,12 @@ func (c *Client) buildURL(path string) string {
 // FetchConfig 获取节点配置（支持 ETag 缓存）
 // 返回 nil, nil 表示 304 未修改
 // 提取 server_port、push_interval、pull_interval、routes、padding_scheme 等参数
-func (c *Client) FetchConfig() (*NodeConfig, error) {
-	resp, err := doWithRetry(func() (*http.Response, error) {
-		req, err := http.NewRequest(http.MethodGet, c.buildURL("config"), nil)
+func (c *Client) FetchConfig(ctx context.Context) (*NodeConfig, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.buildURL("config"), nil)
 		if err != nil {
 			return nil, fmt.Errorf("创建请求失败: %w", err)
 		}
@@ -78,9 +83,12 @@ func (c *Client) FetchConfig() (*NodeConfig, error) {
 // FetchUsers 获取用户列表（支持 ETag 缓存）
 // 返回 nil, nil 表示 304 未修改
 // ETag 含双引号原样存储和发送
-func (c *Client) FetchUsers() ([]User, error) {
-	resp, err := doWithRetry(func() (*http.Response, error) {
-		req, err := http.NewRequest(http.MethodGet, c.buildURL("user"), nil)
+func (c *Client) FetchUsers(ctx context.Context) ([]User, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.buildURL("user"), nil)
 		if err != nil {
 			return nil, fmt.Errorf("创建请求失败: %w", err)
 		}
@@ -127,7 +135,9 @@ func (c *Client) FetchUsers() ([]User, error) {
 
 // TestConnection 测试 API 连接（调用 config 接口）
 func (c *Client) TestConnection() error {
-	_, err := c.FetchConfig()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := c.FetchConfig(ctx)
 	return err
 }
 

@@ -186,7 +186,7 @@ func main() {
 		}
 
 		// 获取节点配置
-		nodeCfg, err := fetchAndCacheConfig(apiClient, cfg, logger)
+		nodeCfg, err := fetchAndCacheConfig(ctx, apiClient, cfg, logger)
 		if err != nil {
 			logger.WithError(err).Warn("获取节点配置失败，使用默认间隔")
 		}
@@ -293,8 +293,8 @@ func main() {
 
 // fetchAndCacheConfig fetches node config from API and caches it locally.
 // Falls back to cached config if API is unreachable.
-func fetchAndCacheConfig(client *api.Client, cfg *internalConfig.Config, logger *logrus.Logger) (*api.NodeConfig, error) {
-	nodeCfg, err := client.FetchConfig()
+func fetchAndCacheConfig(ctx context.Context, client *api.Client, cfg *internalConfig.Config, logger *logrus.Logger) (*api.NodeConfig, error) {
+	nodeCfg, err := client.FetchConfig(ctx)
 	if err != nil {
 		// Try loading from cache.
 		logger.WithError(err).Warn("API 不可达，尝试加载缓存配置")

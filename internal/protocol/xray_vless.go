@@ -24,7 +24,7 @@ func (v *VlessTCPTLSVision) GenerateInbound(params *InboundParams) (json.RawMess
 		"certificates": []map[string]interface{}{
 			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
 		},
-		"alpn": inboundALPN(params, defaultTLSALPN),
+		"alpn": inboundTLSALPN(params),
 	}
 	for k, val := range tlsVersionSettings(params) {
 		tlsSettings[k] = val
@@ -66,7 +66,7 @@ func (v *VlessTCPTLSVision) GenerateURI(user *api.User, info *ServerInfo) string
 	params.Set("security", "tls")
 	params.Set("sni", info.Domain)
 	params.Set("flow", "xtls-rprx-vision")
-	params.Set("alpn", alpnQueryValue(serverInfoALPN(info, defaultTLSALPN)))
+	params.Set("alpn", alpnQueryValue(serverInfoTLSALPN(info)))
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, host, info.Port, params.Encode(),
 		url.PathEscape(fmt.Sprintf("%s-vless-vision", info.Domain)))
 }
@@ -83,7 +83,7 @@ func (v *VlessTCPTLSVision) GenerateClashProxy(user *api.User, info *ServerInfo)
 		"flow":               "xtls-rprx-vision",
 		"network":            "tcp",
 		"client-fingerprint": "chrome",
-		"alpn":               serverInfoALPN(info, defaultTLSALPN),
+		"alpn":               serverInfoTLSALPN(info),
 	}
 	markClashUDP(proxy)
 	markClashSkipCertVerify(proxy, info)
@@ -101,7 +101,7 @@ func (v *VlessTCPTLSVision) GenerateSingBoxOutbound(user *api.User, info *Server
 		"tls": map[string]interface{}{
 			"enabled":     true,
 			"server_name": info.Domain,
-			"alpn":        serverInfoALPN(info, defaultTLSALPN),
+			"alpn":        serverInfoTLSALPN(info),
 		},
 	}
 	markSingBoxTLSInsecure(outbound, info)

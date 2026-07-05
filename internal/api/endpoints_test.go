@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -22,6 +24,38 @@ func withoutRetryDelays(t *testing.T) {
 	t.Cleanup(func() {
 		retryDelays = old
 	})
+}
+
+func TestDoWithRetryCancelsBackoff(t *testing.T) {
+	old := retryDelays
+	retryDelays = []time.Duration{time.Hour}
+	t.Cleanup(func() {
+		retryDelays = old
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+		close(done)
+	}()
+
+	start := time.Now()
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	}, newTestLogger())
+	if resp != nil {
+		t.Fatalf("expected nil response, got %#v", resp)
+	}
+	if err == nil || err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("retry backoff did not cancel promptly, elapsed %s", elapsed)
+	}
+	<-done
 }
 
 func TestFetchConfig_Success(t *testing.T) {
@@ -46,7 +80,7 @@ func TestFetchConfig_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
-	result, err := client.FetchConfig()
+	result, err := client.FetchConfig(context.Background())
 	if err != nil {
 		t.Fatalf("FetchConfig failed: %v", err)
 	}
@@ -76,7 +110,7 @@ func TestFetchConfig_CustomPrefix(t *testing.T) {
 	client := NewClient(srv.URL+"/", "test-token", 1, "vmess", newTestLogger())
 	client.SetAPIPrefix("/custom/node/")
 
-	result, err := client.FetchConfig()
+	result, err := client.FetchConfig(context.Background())
 	if err != nil {
 		t.Fatalf("FetchConfig failed: %v", err)
 	}
@@ -103,7 +137,7 @@ func TestFetchConfig_ETag304(t *testing.T) {
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
 
 	// First call: should get config
-	result, err := client.FetchConfig()
+	result, err := client.FetchConfig(context.Background())
 	if err != nil {
 		t.Fatalf("first FetchConfig failed: %v", err)
 	}
@@ -112,7 +146,7 @@ func TestFetchConfig_ETag304(t *testing.T) {
 	}
 
 	// Second call: should get 304 (nil config)
-	result, err = client.FetchConfig()
+	result, err = client.FetchConfig(context.Background())
 	if err != nil {
 		t.Fatalf("second FetchConfig failed: %v", err)
 	}
@@ -143,7 +177,7 @@ func TestFetchUsers_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
-	result, err := client.FetchUsers()
+	result, err := client.FetchUsers(context.Background())
 	if err != nil {
 		t.Fatalf("FetchUsers failed: %v", err)
 	}
@@ -184,7 +218,7 @@ func TestFetchUsers_ETag304(t *testing.T) {
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
 
 	// First call: should get users
-	result, err := client.FetchUsers()
+	result, err := client.FetchUsers(context.Background())
 	if err != nil {
 		t.Fatalf("first FetchUsers failed: %v", err)
 	}
@@ -193,7 +227,7 @@ func TestFetchUsers_ETag304(t *testing.T) {
 	}
 
 	// Second call: should get 304 (nil)
-	result, err = client.FetchUsers()
+	result, err = client.FetchUsers(context.Background())
 	if err != nil {
 		t.Fatalf("second FetchUsers failed: %v", err)
 	}
@@ -220,13 +254,13 @@ func TestFetchConfig_ETagWithQuotes(t *testing.T) {
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
 
 	// First call: no If-None-Match
-	_, _ = client.FetchConfig()
+	_, _ = client.FetchConfig(context.Background())
 	if receivedETag != "" {
 		t.Errorf("first call should not send If-None-Match, got %q", receivedETag)
 	}
 
 	// Second call: should send stored ETag with quotes
-	_, _ = client.FetchConfig()
+	_, _ = client.FetchConfig(context.Background())
 	if receivedETag != etag {
 		t.Errorf("expected If-None-Match %q, got %q", etag, receivedETag)
 	}
@@ -265,7 +299,7 @@ func TestFetchConfig_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
-	result, err := client.FetchConfig()
+	result, err := client.FetchConfig(context.Background())
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}
@@ -282,7 +316,7 @@ func TestFetchUsers_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token", 1, "vmess", newTestLogger())
-	result, err := client.FetchUsers()
+	result, err := client.FetchUsers(context.Background())
 	if err == nil {
 		t.Fatal("expected error for 403 response")
 	}

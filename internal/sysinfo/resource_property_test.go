@@ -222,11 +222,7 @@ func TestProperty5_PartialCollectionFailureDoesNotAffectOverall(t *testing.T) {
 
 			if unavailable[metricNetwork] {
 				result := readNetworkStats()
-				if result.Sent != 0 || result.Recv != 0 {
-					// On a system without /proc/net/dev, should be zero
-					// On Linux with /proc/net/dev, non-zero is also valid
-					// The key property: no panic occurred
-				}
+				_ = result // no panic is the key assertion; values depend on host /proc availability
 			}
 
 			if unavailable[metricDiskIO] {

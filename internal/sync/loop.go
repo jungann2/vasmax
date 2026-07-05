@@ -137,7 +137,7 @@ func (l *Loop) RunOnce(ctx context.Context) error {
 
 // pullUsers 拉取用户列表 → 必要时重新生成配置 → 原子替换 UserTable → 重载核心
 func (l *Loop) pullUsers(ctx context.Context) error {
-	users, err := l.apiClient.FetchUsers()
+	users, err := l.apiClient.FetchUsers(ctx)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,12 +20,23 @@ var retryDelays = []time.Duration{
 // doWithRetry 带指数退避重试的请求执行
 // 仅对 5xx 和网络错误重试，4xx（非 304）不重试
 // 记录错误日志含状态码和响应体摘要
-func doWithRetry(fn func() (*http.Response, error), logger *logrus.Logger) (*http.Response, error) {
+func doWithRetry(ctx context.Context, fn func() (*http.Response, error), logger *logrus.Logger) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var lastErr error
 
 	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		resp, err := fn()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			// 网络错误，重试
 			lastErr = err
 			if attempt < len(retryDelays) {
@@ -33,7 +45,9 @@ func doWithRetry(fn func() (*http.Response, error), logger *logrus.Logger) (*htt
 					"delay":   retryDelays[attempt],
 					"error":   err.Error(),
 				}).Warn("请求网络错误，准备重试")
-				time.Sleep(retryDelays[attempt])
+				if err := sleepWithContext(ctx, retryDelays[attempt]); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			return nil, fmt.Errorf("请求失败（已重试 %d 次）: %w", len(retryDelays), lastErr)
@@ -57,7 +71,9 @@ func doWithRetry(fn func() (*http.Response, error), logger *logrus.Logger) (*htt
 					"delay":   retryDelays[attempt],
 					"body":    truncateBody(body),
 				}).Warn("API 返回服务端错误，准备重试")
-				time.Sleep(retryDelays[attempt])
+				if err := sleepWithContext(ctx, retryDelays[attempt]); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			return nil, fmt.Errorf("请求失败（已重试 %d 次）: %w", len(retryDelays), lastErr)
@@ -68,4 +84,19 @@ func doWithRetry(fn func() (*http.Response, error), logger *logrus.Logger) (*htt
 	}
 
 	return nil, fmt.Errorf("请求失败（已重试 %d 次）: %w", len(retryDelays), lastErr)
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

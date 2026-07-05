@@ -28,7 +28,7 @@ func (c *Client) PushTraffic(ctx context.Context, data map[int][2]int64) error {
 		return fmt.Errorf("序列化流量数据失败: %w", err)
 	}
 
-	resp, err := doWithRetry(func() (*http.Response, error) {
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
 		return c.doRequest(ctx, http.MethodPost, "push", body)
 	}, c.logger)
 	if err != nil {
@@ -63,7 +63,7 @@ func (c *Client) PushAlive(ctx context.Context, data map[int][]string) error {
 		return fmt.Errorf("序列化在线数据失败: %w", err)
 	}
 
-	resp, err := doWithRetry(func() (*http.Response, error) {
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
 		return c.doRequest(ctx, http.MethodPost, "alive", body)
 	}, c.logger)
 	if err != nil {
@@ -84,7 +84,7 @@ func (c *Client) PushAlive(ctx context.Context, data map[int][]string) error {
 // 返回格式: {"alive": {"user_id": count}} -> map[int]int
 // 仅包含 device_limit > 0 的用户
 func (c *Client) FetchAliveList(ctx context.Context) (map[int]int, error) {
-	resp, err := doWithRetry(func() (*http.Response, error) {
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
 		return c.doRequest(ctx, http.MethodGet, "alivelist", nil)
 	}, c.logger)
 	if err != nil {
@@ -128,7 +128,7 @@ func (c *Client) PushStatus(ctx context.Context, status *NodeStatus) error {
 		return fmt.Errorf("序列化状态数据失败: %w", err)
 	}
 
-	resp, err := doWithRetry(func() (*http.Response, error) {
+	resp, err := doWithRetry(ctx, func() (*http.Response, error) {
 		return c.doRequest(ctx, http.MethodPost, "status", body)
 	}, c.logger)
 	if err != nil {

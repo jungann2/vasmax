@@ -51,6 +51,10 @@ func (c *Client) SetAPIPrefix(prefix string) {
 // 自动拼接 URL: {baseURL}/{prefix}/v1/server/UniProxy/{path}?token=&node_id=&node_type=
 // prefix 默认为 "api"，可通过 SetAPIPrefix 自定义
 func (c *Client) doRequest(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	prefix := "api"
 	if c.apiPrefix != "" {
 		prefix = c.apiPrefix
