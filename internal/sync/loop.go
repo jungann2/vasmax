@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -18,6 +20,7 @@ import (
 	"vasmax/internal/config"
 	"vasmax/internal/core"
 	"vasmax/internal/protocol"
+	routePkg "vasmax/internal/route"
 	"vasmax/internal/security"
 	"vasmax/internal/sysinfo"
 	"vasmax/internal/traffic"
@@ -37,6 +40,7 @@ type Loop struct {
 	logger         *logrus.Logger
 	auditLog       *audit.Logger
 	xrayStats      *traffic.XrayStatsCollector
+	singboxStats   *traffic.XrayStatsCollector
 	emptyUserPulls int
 	configDirty    bool
 	configDirtyWhy string
@@ -67,6 +71,7 @@ func NewLoop(
 		logger:         logger,
 		auditLog:       auditLog,
 		xrayStats:      traffic.NewXrayStatsCollector("", ""),
+		singboxStats:   traffic.NewXrayStatsCollector(protocol.SingBoxStatsAPIAddr, ""),
 	}
 }
 
@@ -75,6 +80,133 @@ func NewLoop(
 func (l *Loop) MarkConfigDirty(reason string) {
 	l.configDirty = true
 	l.configDirtyWhy = reason
+}
+
+func (l *Loop) syncNodeConfig(ctx context.Context, pullInterval, pushInterval time.Duration) (time.Duration, time.Duration, error) {
+	if l.apiClient == nil {
+		return pullInterval, pushInterval, nil
+	}
+	nodeCfg, err := l.apiClient.FetchConfig(ctx)
+	if err != nil {
+		return pullInterval, pushInterval, err
+	}
+	if nodeCfg == nil {
+		return pullInterval, pushInterval, nil
+	}
+
+	nextPull := pullInterval
+	nextPush := pushInterval
+	if nodeCfg.BaseConfig.PullInterval > 0 {
+		nextPull = time.Duration(nodeCfg.BaseConfig.PullInterval) * time.Second
+	}
+	if nodeCfg.BaseConfig.PushInterval > 0 {
+		nextPush = time.Duration(nodeCfg.BaseConfig.PushInterval) * time.Second
+	}
+	nextPull = clampManagedInterval("pull_interval", nextPull, l.config.Sync.MinPullIntervalSeconds, l.logger)
+	nextPush = clampManagedInterval("push_interval", nextPush, l.config.Sync.MinPushIntervalSeconds, l.logger)
+
+	oldNodeCfg := l.nodeConfig
+	runtimeChanged := l.applyManagedNodeConfig(nodeCfg)
+	if oldNodeCfg == nil ||
+		!reflect.DeepEqual(oldNodeCfg.PaddingScheme, nodeCfg.PaddingScheme) ||
+		!reflect.DeepEqual(oldNodeCfg.Routes, nodeCfg.Routes) {
+		runtimeChanged = true
+	}
+	l.nodeConfig = nodeCfg
+	if runtimeChanged {
+		l.MarkConfigDirty("xboard node config changed")
+	}
+	return nextPull, nextPush, nil
+}
+
+func (l *Loop) applyManagedNodeConfig(nodeCfg *api.NodeConfig) bool {
+	if l == nil || l.config == nil || nodeCfg == nil {
+		return false
+	}
+
+	changed := false
+	if nodeCfg.ServerName != "" && l.config.TLS.Domain != nodeCfg.ServerName {
+		l.config.TLS.Domain = nodeCfg.ServerName
+		changed = true
+	}
+	if nodeCfg.ServerPort <= 0 {
+		return changed
+	}
+
+	matches := l.managedDirectProtocols()
+	if len(matches) != 1 {
+		if len(matches) > 1 {
+			l.logger.WithFields(logrus.Fields{
+				"node_type": l.config.NodeType,
+				"protocols": matches,
+			}).Warn("Xboard 下发端口匹配到多个直连协议，跳过自动覆盖以避免端口冲突")
+		}
+		return changed
+	}
+
+	if l.config.ProtocolPorts == nil {
+		l.config.ProtocolPorts = make(map[string]int)
+	}
+	if l.config.ProtocolPorts[matches[0]] != nodeCfg.ServerPort {
+		l.config.ProtocolPorts[matches[0]] = nodeCfg.ServerPort
+		l.logger.WithFields(logrus.Fields{
+			"protocol": matches[0],
+			"port":     nodeCfg.ServerPort,
+		}).Info("已应用 Xboard 下发监听端口")
+		changed = true
+	}
+	return changed
+}
+
+func (l *Loop) managedDirectProtocols() []string {
+	var matches []string
+	for _, protoName := range l.config.Protocols {
+		p, ok := l.registry.Get(protoName)
+		if !ok || protocol.NeedsNginxProxy(p) {
+			continue
+		}
+		if managedProtocolMatchesNodeType(protoName, l.config.NodeType) {
+			matches = append(matches, protoName)
+		}
+	}
+	return matches
+}
+
+func managedProtocolMatchesNodeType(protoName, nodeType string) bool {
+	switch strings.ToLower(nodeType) {
+	case "anytls", "tuic", "naive":
+		return protoName == nodeType
+	case "hysteria", "hysteria2":
+		return protoName == "hysteria2"
+	case "socks", "socks5":
+		return protoName == "socks5"
+	case "vless":
+		return strings.HasPrefix(protoName, "vless_")
+	case "vmess":
+		return strings.HasPrefix(protoName, "vmess_")
+	case "trojan":
+		return strings.HasPrefix(protoName, "trojan_")
+	default:
+		return protoName == nodeType
+	}
+}
+
+func clampManagedInterval(name string, interval time.Duration, minSeconds int, logger *logrus.Logger) time.Duration {
+	if minSeconds <= 0 {
+		return interval
+	}
+	minInterval := time.Duration(minSeconds) * time.Second
+	if interval >= minInterval {
+		return interval
+	}
+	if logger != nil {
+		logger.WithFields(logrus.Fields{
+			"name":      name,
+			"requested": interval,
+			"minimum":   minInterval,
+		}).Warn("Xboard 下发同步间隔过短，已使用本地最小间隔保护")
+	}
+	return minInterval
 }
 
 // Start 启动同步循环，使用 time.Ticker 按间隔执行
@@ -91,6 +223,20 @@ func (l *Loop) Start(ctx context.Context, pullInterval, pushInterval time.Durati
 
 	l.loadCachedUsersIntoManager()
 
+	var err error
+	initialPull := pullInterval
+	initialPush := pushInterval
+	pullInterval, pushInterval, err = l.syncNodeConfig(ctx, pullInterval, pushInterval)
+	if err != nil {
+		l.logger.WithError(err).Warn("初始同步节点配置失败")
+	}
+	if pullInterval != initialPull {
+		pullTicker.Reset(pullInterval)
+	}
+	if pushInterval != initialPush {
+		pushTicker.Reset(pushInterval)
+	}
+
 	// 启动时立即执行一次同步，不等待第一个 tick
 	if err := l.pullUsers(ctx); err != nil {
 		l.logger.WithError(err).Error("初始拉取用户失败")
@@ -105,6 +251,20 @@ func (l *Loop) Start(ctx context.Context, pullInterval, pushInterval time.Durati
 			l.logger.Info("同步循环已停止")
 			return
 		case <-pullTicker.C:
+			nextPull, nextPush, err := l.syncNodeConfig(ctx, pullInterval, pushInterval)
+			if err != nil {
+				l.logger.WithError(err).Warn("同步节点配置失败")
+			}
+			if nextPull != pullInterval {
+				pullInterval = nextPull
+				pullTicker.Reset(pullInterval)
+				l.logger.WithField("pull_interval", pullInterval).Info("已更新用户拉取间隔")
+			}
+			if nextPush != pushInterval {
+				pushInterval = nextPush
+				pushTicker.Reset(pushInterval)
+				l.logger.WithField("push_interval", pushInterval).Info("已更新数据上报间隔")
+			}
 			if err := l.pullUsers(ctx); err != nil {
 				l.logger.WithError(err).Error("拉取用户失败")
 			}
@@ -275,6 +435,8 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 	var errs []error
 	writes := make([]configWrite, 0, len(l.config.Protocols))
 	writeTargets := make(map[string]struct{}, len(l.config.Protocols))
+	hasXray := false
+	hasSingbox := false
 
 	// 按核心类型分组已安装协议
 	for _, protoName := range l.config.Protocols {
@@ -350,9 +512,11 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		var fileName string
 		switch p.CoreType() {
 		case "xray":
+			hasXray = true
 			confDir = l.config.Paths.XrayConf
 			fileName = fmt.Sprintf("05_%s_inbounds.json", protoName)
 		case "singbox":
+			hasSingbox = true
 			confDir = l.config.Paths.SingBoxConf
 			fileName = fmt.Sprintf("10_%s_inbounds.json", protoName)
 		default:
@@ -378,6 +542,44 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		}
 
 		writes = append(writes, configWrite{path: confPath, data: data, perm: 0644})
+	}
+
+	if hasXray && l.nodeConfig != nil {
+		data, err := routePkg.BuildXrayPanelRouting(l.nodeConfig.Routes)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("xray panel routes: %w", err))
+		} else {
+			writes = append(writes, configWrite{
+				path: filepath.Join(l.config.Paths.XrayConf, "04_routing.json"),
+				data: data,
+				perm: 0644,
+			})
+		}
+	}
+
+	if hasSingbox {
+		data, err := protocol.GenerateSingBoxStatsAPIConfigData(apiUsers)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("sing-box stats config: %w", err))
+		} else {
+			writes = append(writes, configWrite{
+				path: protocol.SingBoxStatsConfigPath(l.config.Paths.SingBoxConf),
+				data: data,
+				perm: 0644,
+			})
+		}
+		if l.nodeConfig != nil {
+			routeData, err := routePkg.BuildSingBoxPanelRoute(l.nodeConfig.Routes)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("sing-box panel routes: %w", err))
+			} else {
+				writes = append(writes, configWrite{
+					path: filepath.Join(l.config.Paths.SingBoxConf, "04_xboard_route.json"),
+					data: routeData,
+					perm: 0644,
+				})
+			}
+		}
 	}
 
 	if len(errs) > 0 {
@@ -646,33 +848,47 @@ func (l *Loop) reloadCores() error {
 	return errors.Join(errs...)
 }
 
-// collectXrayTraffic 从 Xray Stats API 采集流量并累加到 trafficCounter
-// 同时根据有流量的用户更新 alive tracker（有流量即视为在线）
-func (l *Loop) collectXrayTraffic() {
-	// 检查是否有 Xray 协议
+// collectCoreTraffic 从可用核心的 Stats API 采集流量并累加到 trafficCounter。
+// Stats API 不暴露真实客户端 IP，这里只能以占位 IP 标记用户在线。
+func (l *Loop) collectCoreTraffic() {
 	hasXray := false
+	hasSingbox := false
 	for _, protoName := range l.config.Protocols {
-		if p, ok := l.registry.Get(protoName); ok && p.CoreType() == "xray" {
-			hasXray = true
-			break
+		if p, ok := l.registry.Get(protoName); ok {
+			switch p.CoreType() {
+			case "xray":
+				hasXray = true
+			case "singbox":
+				hasSingbox = true
+			}
 		}
 	}
-	if !hasXray {
-		return
+
+	if hasXray {
+		stats, err := l.xrayStats.Collect()
+		if err != nil {
+			l.logger.WithError(err).Debug("采集 Xray 流量失败")
+		} else {
+			l.addStatsTraffic(stats)
+		}
 	}
 
-	stats, err := l.xrayStats.Collect()
-	if err != nil {
-		l.logger.WithError(err).Debug("采集 Xray 流量失败")
-		return
+	if hasSingbox {
+		stats, err := l.singboxStats.Collect()
+		if err != nil {
+			l.logger.WithError(err).Debug("采集 sing-box 流量失败")
+		} else {
+			l.addStatsTraffic(stats)
+		}
 	}
 
-	// stats 格式: map["user_{id}"][upload, download]
-	// 需要解析 email 中的 user_id
+	l.aliveTracker.CleanExpired(5 * time.Minute)
+}
+
+func (l *Loop) addStatsTraffic(stats map[string][2]int64) {
 	for email, trafficData := range stats {
-		// email 格式: "user_{id}"
-		var uid int
-		if _, err := fmt.Sscanf(email, "user_%d", &uid); err != nil {
+		uid, ok := managedUserIDFromStatsName(email)
+		if !ok {
 			continue
 		}
 		if trafficData[0] > 0 || trafficData[1] > 0 {
@@ -682,9 +898,18 @@ func (l *Loop) collectXrayTraffic() {
 			l.aliveTracker.Track(uid, "127.0.0.1")
 		}
 	}
+}
 
-	// 清理超过 2 个 push 周期无活动的用户
-	l.aliveTracker.CleanExpired(5 * time.Minute)
+func managedUserIDFromStatsName(name string) (int, bool) {
+	if !strings.HasPrefix(name, "user_") {
+		return 0, false
+	}
+	rest := strings.TrimPrefix(name, "user_")
+	var uid int
+	if _, err := fmt.Sscanf(rest, "%d", &uid); err != nil || uid <= 0 {
+		return 0, false
+	}
+	return uid, true
 }
 
 // pushData 上报流量、在线用户、节点状态
@@ -692,8 +917,8 @@ func (l *Loop) pushData(ctx context.Context) error {
 	// 初始化静态信息（仅首次生效，内部使用 sync.Once）
 	sysinfo.InitStaticInfo()
 
-	// 0. 从 Xray Stats API 采集流量并累加到 trafficCounter
-	l.collectXrayTraffic()
+	// 0. 从核心 Stats API 采集流量并累加到 trafficCounter
+	l.collectCoreTraffic()
 
 	// 1. 流量上报
 	snapshot := l.trafficCounter.Snapshot()

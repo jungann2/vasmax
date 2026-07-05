@@ -123,6 +123,26 @@ func TestValidateManagedUsersRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestManagedUserIDFromStatsName(t *testing.T) {
+	tests := []struct {
+		name string
+		id   int
+		ok   bool
+	}{
+		{name: "user_1", id: 1, ok: true},
+		{name: "user_23-anytls", id: 23, ok: true},
+		{name: "admin_1", ok: false},
+		{name: "user_0", ok: false},
+		{name: "user_bad", ok: false},
+	}
+	for _, tt := range tests {
+		got, ok := managedUserIDFromStatsName(tt.name)
+		if got != tt.id || ok != tt.ok {
+			t.Fatalf("managedUserIDFromStatsName(%q) = (%d, %v), want (%d, %v)", tt.name, got, ok, tt.id, tt.ok)
+		}
+	}
+}
+
 func TestShouldDeferEmptyUsersUntilThreshold(t *testing.T) {
 	l := &Loop{
 		config: &config.Config{

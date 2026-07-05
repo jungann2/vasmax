@@ -1,9 +1,12 @@
 package route
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"vasmax/internal/api"
 )
 
 func TestBuildSingboxRuleMapsXrayBlockedOutboundToSingboxBlock(t *testing.T) {
@@ -95,5 +98,38 @@ func assertFileBytes(t *testing.T, path string, want []byte) {
 	}
 	if string(got) != string(want) {
 		t.Fatalf("%s = %s, want %s", path, got, want)
+	}
+}
+
+func TestBuildPanelRoutesForXrayAndSingBox(t *testing.T) {
+	routes := []api.RouteRule{
+		{ID: 1, Match: []string{"*.example.com", "10.0.0.0/8"}, Action: "direct"},
+		{ID: 2, Match: []string{"geosite:cn", "geoip:cn"}, Action: "block"},
+	}
+
+	xrayData, err := BuildXrayPanelRouting(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var xray map[string]map[string]interface{}
+	if err := json.Unmarshal(xrayData, &xray); err != nil {
+		t.Fatal(err)
+	}
+	xrayRules := xray["routing"]["rules"].([]interface{})
+	if len(xrayRules) != 4 {
+		t.Fatalf("xray rules = %d, want 4: %s", len(xrayRules), xrayData)
+	}
+
+	singBoxData, err := BuildSingBoxPanelRoute(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var singBox map[string]map[string]interface{}
+	if err := json.Unmarshal(singBoxData, &singBox); err != nil {
+		t.Fatal(err)
+	}
+	sbRules := singBox["route"]["rules"].([]interface{})
+	if len(sbRules) != 4 {
+		t.Fatalf("sing-box rules = %d, want 4: %s", len(sbRules), singBoxData)
 	}
 }

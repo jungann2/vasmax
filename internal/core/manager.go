@@ -325,7 +325,33 @@ func (m *Manager) prepareSingBoxRuntime() error {
 	if err := os.Chmod(m.singbox.BinaryPath, 0755); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("chmod sing-box binary: %w", err)
 	}
-	return m.TestSingBoxConfig()
+	if err := m.TestSingBoxConfig(); err != nil {
+		if retryErr := m.retrySingBoxWithoutStatsAPI(err); retryErr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) retrySingBoxWithoutStatsAPI(original error) error {
+	statsPath := protocol.SingBoxStatsConfigPath(m.singbox.ConfDir)
+	if _, err := os.Stat(statsPath); err != nil {
+		return err
+	}
+	if err := protocol.RemoveSingBoxStatsAPIConfig(m.singbox.ConfDir); err != nil {
+		return err
+	}
+	if err := m.MergeSingBoxConfig(); err != nil {
+		return err
+	}
+	if err := m.TestSingBoxConfig(); err != nil {
+		return err
+	}
+	if m.logger != nil {
+		m.logger.WithError(original).Warn("sing-box V2Ray API 统计不可用，已禁用 sing-box 托管流量统计配置")
+	}
+	return nil
 }
 
 // StopAll 停止所有核心

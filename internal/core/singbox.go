@@ -86,6 +86,16 @@ func (s *SingBox) MergeConfig() error {
 				} else {
 					merged[k] = v
 				}
+			} else if k == "experimental" {
+				if existing, ok := merged[k]; ok {
+					mergedObj, mergeErr := mergeJSONObjects(existing, v)
+					if mergeErr != nil {
+						return fmt.Errorf("合并 %s.experimental 失败: %w", entry.Name(), mergeErr)
+					}
+					merged[k] = mergedObj
+				} else {
+					merged[k] = v
+				}
 			} else if k == "route" {
 				// route 需要特殊处理：合并 rules 和 rule_set 数组
 				if existing, ok := merged[k]; ok {
@@ -122,6 +132,20 @@ func mergeJSONArrays(a, b json.RawMessage) (json.RawMessage, error) {
 	}
 	arrA = append(arrA, arrB...)
 	return json.Marshal(arrA)
+}
+
+func mergeJSONObjects(a, b json.RawMessage) (json.RawMessage, error) {
+	var objA, objB map[string]json.RawMessage
+	if err := json.Unmarshal(a, &objA); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &objB); err != nil {
+		return nil, err
+	}
+	for k, v := range objB {
+		objA[k] = v
+	}
+	return json.Marshal(objA)
 }
 
 // mergeRouteObjects 合并两个 route 对象，其中 rules 和 rule_set 数组合并

@@ -1,17 +1,23 @@
 package api
 
-import "encoding/json"
-
 // NodeConfig 从 xboard API 获取的节点配置
 type NodeConfig struct {
-	ServerPort    int               `json:"server_port"`
-	ServerName    string            `json:"server_name"`
-	PaddingScheme []string          `json:"padding_scheme"`
-	Routes        []json.RawMessage `json:"routes"`
+	ServerPort    int         `json:"server_port"`
+	ServerName    string      `json:"server_name"`
+	PaddingScheme []string    `json:"padding_scheme"`
+	Routes        []RouteRule `json:"routes"`
 	BaseConfig    struct {
 		PushInterval int `json:"push_interval"`
 		PullInterval int `json:"pull_interval"`
 	} `json:"base_config"`
+}
+
+// RouteRule is the structured route format returned by Xboard UniProxy.
+type RouteRule struct {
+	ID          int      `json:"id"`
+	Match       []string `json:"match"`
+	Action      string   `json:"action"`
+	ActionValue string   `json:"action_value,omitempty"`
 }
 
 // User 用户信息
