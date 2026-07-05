@@ -95,6 +95,8 @@ cdn:
 subscription:
   salt: ""
   domain: sub.example.com
+  # 无域名订阅连接地址。留空时自动探测公网 IP；NAT、多出口或探测失败时建议手动填写。
+  server_ip: ""
   dns_mode: auto
   dns_domestic:
     - https://dns.alidns.com/dns-query
@@ -110,6 +112,21 @@ subscription:
   dns_custom:
     - https://dns.example.com/dns-query
   test_url: https://www.gstatic.com/generate_204
+
+# 服务端 core DNS 配置
+# 只影响服务器上的 Xray/sing-box 出站解析，不影响客户端订阅 DNS。
+# system     = 不生成显式 DNS 配置，使用系统 resolver，默认推荐
+# cloudflare = 使用 1.1.1.1 / 1.0.0.1
+# quad9      = 使用 9.9.9.9 / 149.112.112.112
+# google     = 使用 8.8.8.8 / 8.8.4.4，不作为默认，仅手动选择
+# custom     = 使用 servers 中的普通 DNS IP；不支持 http://、https://、DoH/DoT 地址
+# strategy: ipv4_only/prefer_ipv4/prefer_ipv6/ipv6_only
+server_dns:
+  mode: system
+  servers:
+    - 1.1.1.1
+    - 9.9.9.9
+  strategy: ipv4_only
 
 # Hysteria2 配置
 # down_mbps/up_mbps 为客户端速率提示
@@ -130,13 +147,36 @@ tuic:
 # Reality 配置
 # dest/server_name 只填域名或 域名:端口，不带 http:// 或 https://
 # port 为 Reality 监听端口，默认 443，部分云厂商可用 8443
+# targets 为 Reality Vision 多伪装目标池；每个目标独立端口，订阅会生成多个节点和 Reality智能 分组
+# 如不需要多目标池，可在菜单切换为单伪装目标，targets 会被清空
 reality:
   private_key: ""
   public_key: ""
   short_id: ""
-  dest: www.apple.com:443
-  server_name: www.apple.com
+  dest: www.nvidia.com:443
+  server_name: www.nvidia.com
   port: 443
+  targets:
+    - name: nvidia
+      server_name: www.nvidia.com
+      dest: www.nvidia.com:443
+      port: 443
+    - name: samsung
+      server_name: www.samsung.com
+      dest: www.samsung.com:443
+      port: 444
+    - name: tesla
+      server_name: www.tesla.com
+      dest: www.tesla.com:443
+      port: 445
+    - name: amazon
+      server_name: www.amazon.com
+      dest: www.amazon.com:443
+      port: 446
+    - name: mozilla
+      server_name: www.mozilla.org
+      dest: www.mozilla.org:443
+      port: 447
 
 # Nginx 反向代理配置
 # long_connection_timeout 用于 WebSocket/gRPC/HTTPUpgrade 长连接

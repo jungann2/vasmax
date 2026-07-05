@@ -383,3 +383,70 @@ func TestMonitoringEnabled_ValidationPassesRegardless(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_ProtocolMetadata(t *testing.T) {
+	cfg := &Config{
+		Standalone:      true,
+		Log:             LogConfig{Level: "info"},
+		ProtocolModes:   map[string]string{"vless_reality_vision": "broken"},
+		ProtocolPorts:   map[string]int{"vless_reality_vision": 70000},
+		ProtocolDomains: map[string]string{"vless_ws_tls": "not a domain"},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected protocol metadata validation errors")
+	}
+	errStr := err.Error()
+	for _, want := range []string{"protocol_modes", "protocol_ports", "protocol_domains"} {
+		if !strings.Contains(errStr, want) {
+			t.Fatalf("expected %s error, got %v", want, err)
+		}
+	}
+}
+
+func TestValidate_RealitySettings(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Reality: RealityConfig{
+			Port:       -1,
+			ServerName: "bad domain",
+			Dest:       "https://example.com",
+			Targets: []RealityTarget{{
+				ServerName: "www.example.com",
+				Dest:       "example.com:70000",
+				Port:       70000,
+			}},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected Reality validation errors")
+	}
+	errStr := err.Error()
+	for _, want := range []string{"reality.port", "reality.server_name", "reality.dest", "reality.targets[0].dest", "reality.targets[0].port"} {
+		if !strings.Contains(errStr, want) {
+			t.Fatalf("expected %s error, got %v", want, err)
+		}
+	}
+}
+
+func TestValidate_RealitySettingsValid(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		Reality: RealityConfig{
+			Port:       443,
+			ServerName: "www.nvidia.com",
+			Dest:       "www.nvidia.com:443",
+			Targets: []RealityTarget{{
+				ServerName: "www.samsung.com",
+				Dest:       "www.samsung.com:443",
+				Port:       444,
+			}},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid Reality settings, got %v", err)
+	}
+}

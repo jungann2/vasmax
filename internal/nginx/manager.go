@@ -46,6 +46,50 @@ type Manager struct {
 	mu      sync.Mutex
 }
 
+type ConfigTransaction struct {
+	manager *Manager
+	backups map[string]*nginxConfigBackup
+	closed  bool
+}
+
+type nginxConfigBackup struct {
+	data []byte
+	mode os.FileMode
+}
+
+var (
+	validateNginxConfig = func() error {
+		cmd := exec.Command("nginx", "-t")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("nginx config validation failed: %s: %w", string(output), err)
+		}
+		return nil
+	}
+	reloadNginxConfig = func(logger *logrus.Logger) error {
+		cmd := exec.Command("nginx", "-s", "reload")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			if logger != nil {
+				logger.Warnf("nginx -s reload failed: %s, trying systemctl restart", strings.TrimSpace(string(output)))
+			}
+			restartCmd := exec.Command("systemctl", "restart", "nginx")
+			restartOut, restartErr := restartCmd.CombinedOutput()
+			if restartErr != nil {
+				return fmt.Errorf("nginx restart failed: %s: %w", string(restartOut), restartErr)
+			}
+			if logger != nil {
+				logger.Info("nginx restarted via systemctl")
+			}
+			return nil
+		}
+		if logger != nil {
+			logger.Info("nginx reloaded successfully")
+		}
+		return nil
+	}
+)
+
 // NewManager creates a new Nginx configuration manager.
 func NewManager(confDir string, logger *logrus.Logger) *Manager {
 	if confDir == "" {
@@ -56,7 +100,11 @@ func NewManager(confDir string, logger *logrus.Logger) *Manager {
 
 // validateNginxPath ensures the path is within the allowed Nginx directory.
 func (m *Manager) validateNginxPath(path string) error {
-	return security.ValidatePath(path, []string{AllowedNginxDir})
+	allowed := []string{AllowedNginxDir}
+	if m.confDir != "" {
+		allowed = append(allowed, m.confDir)
+	}
+	return security.ValidatePath(path, allowed)
 }
 
 // GenerateConfig generates the main Nginx server configuration based on installed protocols.
@@ -79,7 +127,161 @@ func (m *Manager) GenerateConfig(params *NginxParams) error {
 		return fmt.Errorf("failed to write nginx config: %w", err)
 	}
 
-	m.logger.Infof("nginx config generated: %s", confPath)
+	if m.logger != nil {
+		m.logger.Infof("nginx config generated: %s", confPath)
+	}
+	return nil
+}
+
+func (m *Manager) BeginConfigTransaction() *ConfigTransaction {
+	return &ConfigTransaction{
+		manager: m,
+		backups: make(map[string]*nginxConfigBackup),
+	}
+}
+
+func (m *Manager) GenerateConfigSafe(params *NginxParams) error {
+	tx := m.BeginConfigTransaction()
+	if err := tx.GenerateConfig(params); err != nil {
+		return err
+	}
+	tx.Commit()
+	return nil
+}
+
+func (m *Manager) SetupSubscribeServerSafe(domain string) error {
+	tx := m.BeginConfigTransaction()
+	if err := tx.SetupSubscribeServer(domain); err != nil {
+		return err
+	}
+	tx.Commit()
+	return nil
+}
+
+func (tx *ConfigTransaction) GenerateConfig(params *NginxParams) error {
+	if err := security.ValidateDomain(params.Domain); err != nil {
+		return fmt.Errorf("invalid domain: %w", err)
+	}
+	if err := tx.trackDomain(params.Domain); err != nil {
+		return err
+	}
+	if err := tx.manager.GenerateConfig(params); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.manager.Validate(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return nil
+}
+
+func (tx *ConfigTransaction) SetupSubscribeServer(domain string) error {
+	if err := tx.trackDomain(domain); err != nil {
+		return err
+	}
+	if err := tx.manager.SetupSubscribeServer(domain); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.manager.Validate(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return nil
+}
+
+func (tx *ConfigTransaction) RemoveLocation(domain, protocol string) error {
+	if err := tx.trackDomain(domain); err != nil {
+		return err
+	}
+	if err := tx.manager.RemoveLocation(domain, protocol); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.manager.Validate(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return nil
+}
+
+func (tx *ConfigTransaction) RemoveLocationByPath(domain, protocolType, path string) error {
+	if err := tx.trackDomain(domain); err != nil {
+		return err
+	}
+	if err := tx.manager.RemoveLocationByPath(domain, protocolType, path); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.manager.Validate(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return nil
+}
+
+func (tx *ConfigTransaction) Reload() error {
+	if err := tx.manager.Reload(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	tx.Commit()
+	return nil
+}
+
+func (tx *ConfigTransaction) Commit() {
+	tx.closed = true
+}
+
+func (tx *ConfigTransaction) Rollback() error {
+	if tx == nil || tx.closed {
+		return nil
+	}
+	var errs []error
+	for path, backup := range tx.backups {
+		if backup == nil {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := security.AtomicWrite(path, backup.data, backup.mode); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	tx.closed = true
+	if len(errs) > 0 {
+		return fmt.Errorf("restore nginx config: %v", errs)
+	}
+	return nil
+}
+
+func (tx *ConfigTransaction) trackDomain(domain string) error {
+	if err := security.ValidateDomain(domain); err != nil {
+		return fmt.Errorf("invalid domain: %w", err)
+	}
+	confPath := filepath.Join(tx.manager.confDir, domain+".conf")
+	if err := tx.manager.validateNginxPath(confPath); err != nil {
+		return err
+	}
+	if _, ok := tx.backups[confPath]; ok {
+		return nil
+	}
+	info, statErr := os.Stat(confPath)
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			tx.backups[confPath] = nil
+			return nil
+		}
+		return fmt.Errorf("failed to snapshot nginx config: %w", err)
+	}
+	if statErr != nil {
+		return fmt.Errorf("failed to stat nginx config: %w", statErr)
+	}
+	copyData := append([]byte(nil), data...)
+	tx.backups[confPath] = &nginxConfigBackup{data: copyData, mode: info.Mode()}
 	return nil
 }
 
@@ -112,7 +314,9 @@ func (m *Manager) AddLocation(domain, protocol, path string, backendPort int) er
 		return fmt.Errorf("failed to write nginx config: %w", err)
 	}
 
-	m.logger.Infof("added location for protocol %s path %s", protocol, path)
+	if m.logger != nil {
+		m.logger.Infof("added location for protocol %s path %s", protocol, path)
+	}
 	return nil
 }
 
@@ -164,7 +368,9 @@ func (m *Manager) removeLocationByTags(domain, tagSpec string, match func(string
 	}
 
 	if !removed {
-		m.logger.Warnf("location block for %s not found", tagSpec)
+		if m.logger != nil {
+			m.logger.Warnf("location block for %s not found", tagSpec)
+		}
 		return nil
 	}
 
@@ -172,7 +378,9 @@ func (m *Manager) removeLocationByTags(domain, tagSpec string, match func(string
 		return fmt.Errorf("failed to write nginx config: %w", err)
 	}
 
-	m.logger.Infof("removed nginx location from %s", confPath)
+	if m.logger != nil {
+		m.logger.Infof("removed nginx location from %s", confPath)
+	}
 	return nil
 }
 
@@ -238,18 +446,15 @@ func (m *Manager) SetupSubscribeServer(domain string) error {
 		return fmt.Errorf("failed to write nginx config: %w", err)
 	}
 
-	m.logger.Info("subscribe server location configured")
+	if m.logger != nil {
+		m.logger.Info("subscribe server location configured")
+	}
 	return nil
 }
 
 // Validate runs nginx -t to validate the configuration.
 func (m *Manager) Validate() error {
-	cmd := exec.Command("nginx", "-t")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("nginx config validation failed: %s: %w", string(output), err)
-	}
-	return nil
+	return validateNginxConfig()
 }
 
 // Reload validates and then reloads Nginx.
@@ -258,21 +463,7 @@ func (m *Manager) Reload() error {
 	if err := m.Validate(); err != nil {
 		return err
 	}
-	cmd := exec.Command("nginx", "-s", "reload")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// PID file missing after upgrade — fall back to systemctl restart
-		m.logger.Warnf("nginx -s reload failed: %s, trying systemctl restart", strings.TrimSpace(string(output)))
-		restartCmd := exec.Command("systemctl", "restart", "nginx")
-		restartOut, restartErr := restartCmd.CombinedOutput()
-		if restartErr != nil {
-			return fmt.Errorf("nginx restart failed: %s: %w", string(restartOut), restartErr)
-		}
-		m.logger.Info("nginx restarted via systemctl")
-		return nil
-	}
-	m.logger.Info("nginx reloaded successfully")
-	return nil
+	return reloadNginxConfig(m.logger)
 }
 
 // NginxVersion returns the installed Nginx version as (major, minor, patch).

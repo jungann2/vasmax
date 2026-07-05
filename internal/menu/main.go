@@ -8,7 +8,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"vasmax/internal/bbr"
 	"vasmax/internal/config"
 	"vasmax/internal/core"
 	"vasmax/internal/firewall"
@@ -63,16 +62,16 @@ func NewMainMenu(
 		registry:  reg,
 		logger:    logger,
 		install:   NewInstallMenu(cfg, coreMgr, reg, rbMgr, nginxMgr, userMgr, subMgr, logger),
-		account:   NewAccountMenu(userMgr, subMgr),
-		routing:   NewRoutingMenu(routeMgr, btMgr, blMgr, warpMgr),
-		tools:     NewToolsMenu(cfg, nginxMgr, logger),
+		account:   NewAccountMenu(cfg, coreMgr, reg, userMgr, subMgr),
+		routing:   NewRoutingMenu(routeMgr, btMgr, blMgr, warpMgr, coreMgr),
+		tools:     NewToolsMenu(cfg, coreMgr, nginxMgr, logger),
 		xboard:    NewXboardMenu(cfg, logger),
 		tls:       NewTLSMenu(cfg, logger),
-		protocols: NewProtocolMenus(cfg, fwMgr, logger),
+		protocols: NewProtocolMenus(cfg, coreMgr, reg, subMgr, userMgr, fwMgr, logger),
 		coreMenu:  NewCoreMenu(coreMgr, logger),
 		subMenu:   NewSubscriptionMenu(cfg, subMgr, userMgr, logger),
 		portMenu:  NewPortMenu(cfg, fwMgr, logger),
-		alpnMenu:  NewALPNMenu(cfg, logger),
+		alpnMenu:  NewALPNMenu(cfg, coreMgr, reg, userMgr, subMgr, logger),
 		monitor:   NewMonitorMenu(cfg, userMgr, logger),
 	}
 }
@@ -179,14 +178,7 @@ func (m *MainMenu) printHeader() {
 		}
 	}
 
-	// 显示 BBR 状态
-	cc := bbr.CurrentCC()
-	qdisc := bbr.CurrentQdisc()
-	if strings.Contains(cc, "bbr") {
-		PrintInfo(fmt.Sprintf("BBR: %s（%s + %s）", Green("已启用"), cc, qdisc))
-	} else {
-		PrintInfo(fmt.Sprintf("BBR: %s（当前: %s + %s）", Yellow("未启用"), cc, qdisc))
-	}
+	PrintInfo("BBR+FQ: " + bbrStatus())
 
 	// 显示 TLS 证书状态
 	if m.config.TLS.Domain != "" {

@@ -3,6 +3,7 @@ package menu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,12 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
 
 	"vasmax/internal/api"
+	"vasmax/internal/bbr"
 	"vasmax/internal/config"
 	"vasmax/internal/core"
 	"vasmax/internal/nginx"
@@ -45,9 +48,150 @@ type certPair struct {
 	key  string
 }
 
+type domainCertActionType string
+
+const (
+	domainCertActionManual              domainCertActionType = "manual"
+	domainCertActionInstallAcmeExisting domainCertActionType = "install_acme_existing"
+	domainCertActionIssueAcme           domainCertActionType = "issue_acme"
+)
+
+type domainCertAction struct {
+	domain   string
+	action   domainCertActionType
+	certFile string
+	keyFile  string
+}
+
 // NewInstallMenu creates a new install menu.
 func NewInstallMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, rbMgr *rollback.Manager, nginxMgr *nginx.Manager, userMgr *user.Manager, subMgr *subscription.Manager, logger *logrus.Logger) *InstallMenu {
 	return &InstallMenu{config: cfg, coreMgr: coreMgr, registry: reg, rollbackMgr: rbMgr, nginxMgr: nginxMgr, userMgr: userMgr, subMgr: subMgr, logger: logger}
+}
+
+func (m *InstallMenu) beginRuntimeTransaction(name string) (func(success bool), bool) {
+	cfgBefore, err := cloneConfig(m.config)
+	if err != nil {
+		PrintError(fmt.Sprintf("创建%s内存配置快照失败: %v", name, err))
+		return nil, false
+	}
+	if m.rollbackMgr == nil {
+		return func(success bool) {
+			if !success && cfgBefore != nil && m.config != nil {
+				*m.config = *cfgBefore
+			}
+		}, true
+	}
+	var extraPaths []string
+	if m.config != nil && strings.TrimSpace(m.config.Paths.NginxConf) != "" {
+		extraPaths = append(extraPaths, m.config.Paths.NginxConf)
+	}
+	snap, err := m.rollbackMgr.CreateSnapshot(extraPaths...)
+	if err != nil {
+		PrintError(fmt.Sprintf("创建%s回滚快照失败: %v", name, err))
+		return nil, false
+	}
+	finished := false
+	return func(success bool) {
+		if finished {
+			return
+		}
+		finished = true
+		if success {
+			if err := m.rollbackMgr.CleanSnapshot(snap); err != nil {
+				m.logWarn(err, "清理安装快照失败")
+			}
+			return
+		}
+		PrintWarning(fmt.Sprintf("%s未完成，正在回滚已写入的配置", name))
+		if err := m.rollbackMgr.Rollback(snap); err != nil {
+			PrintWarning(fmt.Sprintf("回滚部分失败，请检查日志并手动恢复: %v", err))
+		} else {
+			PrintInfo("已恢复安装前配置")
+		}
+		if cfgBefore != nil && m.config != nil {
+			*m.config = *cfgBefore
+		}
+	}, true
+}
+
+func (m *InstallMenu) beginInstallTransaction(name string) (func(success bool), bool) {
+	return m.beginRuntimeTransaction(name)
+}
+
+func cloneConfig(cfg *config.Config) (*config.Config, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var out config.Config
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (m *InstallMenu) logWarn(err error, msg string) {
+	if m.logger != nil {
+		m.logger.WithError(err).Warn(msg)
+	}
+}
+
+func (m *InstallMenu) logWarnf(err error, format string, args ...interface{}) {
+	if m.logger != nil {
+		m.logger.WithError(err).Warnf(format, args...)
+	}
+}
+
+func tlsConfigForDomain(base config.TLSConfig, domain string) config.TLSConfig {
+	out := config.TLSConfig{
+		Domain:     domain,
+		Provider:   base.Provider,
+		MinVersion: base.MinVersion,
+		MaxVersion: base.MaxVersion,
+	}
+	if strings.EqualFold(strings.TrimSpace(base.Domain), strings.TrimSpace(domain)) {
+		out.CertFile = base.CertFile
+		out.KeyFile = base.KeyFile
+	}
+	return out
+}
+
+func (m *InstallMenu) executeDomainCertAction(action domainCertAction, domainCerts map[string]*certPair) bool {
+	switch action.action {
+	case domainCertActionManual:
+		if action.certFile == "" || action.keyFile == "" {
+			PrintError(fmt.Sprintf("%s 的手动证书路径为空，安装中止", action.domain))
+			return false
+		}
+		domainCerts[action.domain] = &certPair{cert: action.certFile, key: action.keyFile}
+		return true
+	case domainCertActionInstallAcmeExisting:
+		PrintInfo(fmt.Sprintf("正在安装 %s 的 acme.sh 证书到 VasmaX TLS 目录...", action.domain))
+		certFile, keyFile := m.installAcmeCertToTLS(action.domain)
+		if certFile == "" || keyFile == "" {
+			PrintError(fmt.Sprintf("%s 的 acme.sh 证书安装失败，安装中止", action.domain))
+			return false
+		}
+		domainCerts[action.domain] = &certPair{cert: certFile, key: keyFile}
+		PrintSuccess(fmt.Sprintf("证书已安装到: %s", certFile))
+		return true
+	case domainCertActionIssueAcme:
+		PrintInfo(fmt.Sprintf("正在为 %s 申请新证书...", action.domain))
+		certFile, keyFile := m.inlineIssueCert(action.domain)
+		if certFile == "" || keyFile == "" {
+			PrintError(fmt.Sprintf("%s 的证书申请失败，安装中止", action.domain))
+			return false
+		}
+		domainCerts[action.domain] = &certPair{cert: certFile, key: keyFile}
+		PrintSuccess(fmt.Sprintf("证书已安装到: %s", certFile))
+		return true
+	default:
+		PrintError(fmt.Sprintf("%s 的证书动作未知: %s", action.domain, action.action))
+		return false
+	}
 }
 
 // Show displays the installation management menu.
@@ -57,14 +201,14 @@ func (m *InstallMenu) Show() {
 
 	for {
 		PrintTitle("安装管理")
-		PrintOption(1, "任意组合安装（需要域名解析）")
-		PrintOption(2, "一键 Reality 组合安装（无域名）")
+		PrintOption(1, "任意组合安装（需要域名解析，Reality Vision 首选）")
+		PrintOption(2, "一键 Reality 组合安装（无域名，Reality Vision 首选）")
 		PrintOption(3, "查看已安装协议")
 		PrintOption(4, "卸载协议")
 		PrintOption(5, "Reality 管理")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "0"})
 		switch choice {
 		case "1":
 			m.installCombination()
@@ -83,7 +227,7 @@ func (m *InstallMenu) Show() {
 }
 
 func (m *InstallMenu) installCombination() {
-	PrintTitle("任意组合安装（需要域名解析）")
+	PrintTitle("任意组合安装（需要域名解析，优先推荐 Reality Vision）")
 
 	// 显示所有协议（固定排序：推荐 → 稳定 → 一般 → 不安全）
 	domainProtos := m.registry.ListAllOrdered()
@@ -200,11 +344,18 @@ func (m *InstallMenu) installCombination() {
 
 	// 端口设置：Nginx 反代协议自动分配内部端口，直连协议让用户确认/自定义
 	// portOverrides 存储用户自定义的端口（协议名 → 端口）
-	portOverrides := promptDirectProtocolPorts(m.config, selected, directProtos)
+	promptCfg, err := cloneConfig(m.config)
+	if err != nil {
+		PrintError(fmt.Sprintf("创建端口提示配置副本失败: %v", err))
+		return
+	}
+	preferRealityVision443ForDirectOnly(promptCfg, selected)
+	portOverrides := promptDirectProtocolPorts(promptCfg, selected, directProtos)
 
 	// TLS 证书检测与申请（按域名去重，每个唯一域名只检测/申请一次）
 	// domainCerts 存储每个域名对应的证书路径
 	domainCerts := make(map[string]*certPair)
+	certActions := make([]domainCertAction, 0)
 
 	if needTLSCert {
 		// 收集所有需要 TLS 证书的唯一域名（保持顺序）
@@ -228,24 +379,17 @@ func (m *InstallMenu) installCombination() {
 			}
 
 			// 先尝试自动检测已有证书
-			tlsCfg := config.TLSConfig{Domain: domain, CertFile: m.config.TLS.CertFile, KeyFile: m.config.TLS.KeyFile}
+			tlsCfg := tlsConfigForDomain(m.config.TLS, domain)
 			certFile, keyFile := config.DetectCertPath(&tlsCfg)
 			if certFile != "" && keyFile != "" {
 				if strings.Contains(certFile, ".acme.sh") {
 					PrintInfo(fmt.Sprintf("检测到 acme.sh 证书: %s", certFile))
-					PrintInfo("正在安装证书到 VasmaX TLS 目录...")
-					installed, iKey := m.installAcmeCertToTLS(domain)
-					if installed != "" && iKey != "" {
-						certFile = installed
-						keyFile = iKey
-						PrintSuccess(fmt.Sprintf("证书已安装到: %s", certFile))
-					} else {
-						PrintWarning("证书安装失败，将直接使用 acme.sh 源路径")
-					}
+					PrintInfo("将在安装事务中复制证书到 VasmaX TLS 目录")
+					certActions = append(certActions, domainCertAction{domain: domain, action: domainCertActionInstallAcmeExisting})
 				} else {
 					PrintSuccess(fmt.Sprintf("已自动检测到 TLS 证书: %s", certFile))
+					certActions = append(certActions, domainCertAction{domain: domain, action: domainCertActionManual, certFile: certFile, keyFile: keyFile})
 				}
-				domainCerts[domain] = &certPair{certFile, keyFile}
 			} else {
 				PrintWarning(fmt.Sprintf("未自动检测到 %s 的 TLS 证书", domain))
 				PrintInfo("域名模式协议需要 TLS 证书才能正常工作")
@@ -256,12 +400,8 @@ func (m *InstallMenu) installCombination() {
 				choice := ReadChoice("请选择", []string{"1", "2", "3"})
 				switch choice {
 				case "1":
-					certFile, keyFile = m.inlineIssueCert(domain)
-					if certFile == "" || keyFile == "" {
-						PrintError("证书申请失败，安装中止")
-						return
-					}
-					domainCerts[domain] = &certPair{certFile, keyFile}
+					PrintInfo("证书申请将在安装事务中执行，失败会回滚 VasmaX 已写入状态")
+					certActions = append(certActions, domainCertAction{domain: domain, action: domainCertActionIssueAcme})
 				case "2":
 					certFile = ReadInput("请输入证书文件路径（fullchain.crt 或 .pem）")
 					keyFile = ReadInput("请输入私钥文件路径（.key）")
@@ -278,11 +418,27 @@ func (m *InstallMenu) installCombination() {
 						return
 					}
 					PrintSuccess(fmt.Sprintf("已指定证书: %s", certFile))
-					domainCerts[domain] = &certPair{certFile, keyFile}
+					certActions = append(certActions, domainCertAction{domain: domain, action: domainCertActionManual, certFile: certFile, keyFile: keyFile})
 				default:
-					PrintWarning("跳过证书申请，非 Reality 协议将无法正常工作直到申请证书并重新安装")
+					PrintError(fmt.Sprintf("%s 的域名协议缺少 TLS 证书，安装中止", domain))
+					return
 				}
 			}
+		}
+	}
+
+	finishInstall, ok := m.beginRuntimeTransaction("域名组合安装")
+	if !ok {
+		return
+	}
+	criticalComplete := false
+	defer func() {
+		finishInstall(criticalComplete)
+	}()
+
+	for _, action := range certActions {
+		if !m.executeDomainCertAction(action, domainCerts) {
+			return
 		}
 	}
 
@@ -308,15 +464,11 @@ func (m *InstallMenu) installCombination() {
 			m.config.Reality.ShortID = shortID
 		}
 		if m.config.Reality.Dest == "" {
-			m.config.Reality.Dest = "www.microsoft.com:443"
-			m.config.Reality.ServerName = "www.microsoft.com"
+			m.config.Reality.Dest = security.DefaultRealityDest
+			m.config.Reality.ServerName = security.DefaultRealityServerName
+			PrintInfo(fmt.Sprintf("Reality 默认伪装目标: %s", m.config.Reality.Dest))
 		}
-	}
-
-	// 创建回滚快照
-	snap, err := m.rollbackMgr.CreateSnapshot()
-	if err != nil {
-		m.logger.WithError(err).Warn("创建回滚快照失败")
+		ensureDefaultRealityVisionTargets(m.config, selected, portOverrides)
 	}
 
 	// 自动创建默认用户（如果没有用户）
@@ -343,9 +495,6 @@ func (m *InstallMenu) installCombination() {
 		if cs, ok := status[coreType]; !ok || !cs.Installed {
 			if err := m.coreMgr.InstallCore(ctx, coreType); err != nil {
 				PrintError(fmt.Sprintf("安装核心 %s 失败: %v", coreType, err))
-				if snap != nil {
-					m.rollbackMgr.Rollback(snap)
-				}
 				return
 			}
 		}
@@ -420,6 +569,7 @@ func (m *InstallMenu) installCombination() {
 			Users:     apiUsers,
 			Tag:       p.Name(),
 			Domain:    protoDomain,
+			ALPN:      m.config.ALPN.ALPNList(),
 			KeepAlive: m.config.Connection,
 		}
 
@@ -451,34 +601,34 @@ func (m *InstallMenu) installCombination() {
 		params.TLSMinVersion = m.config.TLS.MinVersion
 		params.TLSMaxVersion = m.config.TLS.MaxVersion
 
-		inboundJSON, err := p.GenerateInbound(params)
+		inboundJSONs, err := protocol.GenerateInboundMessages(p, params)
 		if err != nil {
 			PrintError(fmt.Sprintf("生成 %s 入站配置失败: %v", p.Name(), err))
-			continue
+			return
 		}
 
 		// 根据核心类型包装和写入
 		var confPath string
 		switch p.CoreType() {
 		case "singbox":
-			// sing-box 直接写入 confdir（sing-box -C 读取目录下所有 JSON）
+			// sing-box partial 配置写入 confdir，启动前由 core manager 合并为 config.json
 			wrapper := map[string]interface{}{
-				"inbounds": []json.RawMessage{inboundJSON},
+				"inbounds": inboundJSONs,
 			}
 			confPath = filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("10_%s_inbounds.json", p.Name()))
 			if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
 				PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
-				continue
+				return
 			}
 		default:
 			// Xray 写入 confdir
 			wrapper := map[string]interface{}{
-				"inbounds": []json.RawMessage{inboundJSON},
+				"inbounds": inboundJSONs,
 			}
 			confPath = filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", p.Name()))
 			if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
 				PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
-				continue
+				return
 			}
 		}
 		PrintSuccess(fmt.Sprintf("%s 配置已生成", p.Name()))
@@ -488,51 +638,60 @@ func (m *InstallMenu) installCombination() {
 	if hasXrayProto {
 		confDir := m.config.Paths.XrayConf
 		if err := protocol.GenerateStatsAPIConfig(confDir); err != nil {
-			m.logger.WithError(err).Warn("生成 Stats API 配置失败")
+			m.logWarn(err, "生成 Stats API 配置失败")
 		}
 		if err := protocol.GenerateStatsModuleConfig(confDir); err != nil {
-			m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+			m.logWarn(err, "生成 Stats 模块配置失败")
 		}
-		if err := protocol.EnsureBaseConfigs(confDir); err != nil {
-			m.logger.WithError(err).Warn("生成 Xray 基础配置失败")
+		if err := protocol.EnsureBaseConfigs(confDir, m.config); err != nil {
+			PrintError(fmt.Sprintf("生成 Xray 基础配置失败: %v", err))
+			return
 		}
 	}
 
 	// 生成 sing-box 基础配置
 	if hasSingBoxProto {
-		if err := protocol.EnsureSingBoxBaseConfigs(m.config.Paths.SingBoxConf); err != nil {
-			m.logger.WithError(err).Warn("生成 sing-box 基础配置失败")
+		if err := protocol.EnsureSingBoxBaseConfigs(m.config.Paths.SingBoxConf, m.config); err != nil {
+			PrintError(fmt.Sprintf("生成 sing-box 基础配置失败: %v", err))
+			return
 		}
 	}
 
-	// 保存域名和证书路径到配置（主域名 + 主域名证书）
-	m.config.TLS.Domain = primaryDomain
-	if cp, ok := domainCerts[primaryDomain]; ok {
-		m.config.TLS.CertFile = cp.cert
-		m.config.TLS.KeyFile = cp.key
+	// 只有真实使用 TLS 证书的域名协议才更新全局 TLS 站点配置。
+	// Reality-only 绑定域名不依赖 Nginx/TLS 站点，避免误导订阅菜单生成不可用的 https://domain/s/... 链接。
+	if len(domainCerts) > 0 {
+		m.config.TLS.Domain = primaryDomain
+		if cp, ok := domainCerts[primaryDomain]; ok {
+			m.config.TLS.CertFile = cp.cert
+			m.config.TLS.KeyFile = cp.key
+		}
 	}
 
 	// 保存配置
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
+		return
 	}
 
 	// 自动配置 Nginx 反代（ws/grpc/httpupgrade 协议需要，支持多域名）
-	m.autoConfigNginxMultiDomain(selected, protocolDomains, domainCerts)
+	if err := m.autoConfigNginxMultiDomain(selected, protocolDomains, domainCerts); err != nil {
+		PrintError(fmt.Sprintf("协议配置已生成，但 Nginx 反代配置失败，安装未完成: %v", err))
+		return
+	}
 
 	// 启动核心服务
 	if hasXrayProto {
 		PrintInfo("正在启动 Xray...")
 		if err := m.coreMgr.RestartXray(); err != nil {
-			PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
+			PrintError(fmt.Sprintf("启动 Xray 失败: %v", err))
+			return
 		}
 	}
 	if hasSingBoxProto {
-		PrintInfo("正在合并 sing-box 配置并启动...")
-		if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
-			PrintError(fmt.Sprintf("sing-box 配置合并失败: %v", err))
-		} else if err := m.coreMgr.RestartSingBox(); err != nil {
-			PrintWarning(fmt.Sprintf("启动 sing-box 失败: %v（可能需要手动启动）", err))
+		PrintInfo("正在启动 sing-box...")
+		if err := m.coreMgr.RestartSingBox(); err != nil {
+			PrintError(fmt.Sprintf("启动 sing-box 失败: %v", err))
+			return
 		}
 	}
 
@@ -547,6 +706,7 @@ func (m *InstallMenu) installCombination() {
 			PrintWarning(fmt.Sprintf("%s 未运行", name))
 		}
 	}
+	m.autoEnableRecommendedBBR()
 
 	// 显示证书文件路径
 	if len(domainCerts) > 0 {
@@ -561,20 +721,18 @@ func (m *InstallMenu) installCombination() {
 		}
 	}
 
+	criticalComplete = true
+
 	// 生成订阅
-	if m.subMgr != nil {
-		_ = m.subMgr.GenerateAll()
-	}
+	subscriptionOK := m.generateSubscriptionsOrWarn()
 
 	// 显示安装结果和分享链接
 	PrintSuccess("域名组合安装完成")
+	if !subscriptionOK {
+		PrintWarning("协议已安装，但订阅文件生成失败；下方即时分享链接仍可用于排查")
+	}
 	fmt.Println()
 	m.showDomainInfo(users, primaryDomain)
-
-	// 清理快照
-	if snap != nil {
-		m.rollbackMgr.CleanSnapshot(snap)
-	}
 }
 
 func (m *InstallMenu) installReality() {
@@ -624,7 +782,12 @@ func (m *InstallMenu) installReality() {
 		return
 	}
 
-	PrintInfo("将自动生成 X25519 密钥对、ShortID 和默认用户")
+	hasSingBoxProto, hasXrayProto, hasRealityProto := selectedProtocolRuntimeFlags(selected)
+	if hasRealityProto {
+		PrintInfo("将自动生成 X25519 密钥对、ShortID 和默认用户")
+	} else {
+		PrintInfo("将自动创建默认用户并生成无域名协议配置")
+	}
 
 	// 0. 设置直连协议监听端口
 	var directProtos []protocol.Protocol
@@ -633,24 +796,41 @@ func (m *InstallMenu) installReality() {
 			directProtos = append(directProtos, p)
 		}
 	}
-	portOverrides := promptDirectProtocolPorts(m.config, selected, directProtos)
+	promptCfg, err := cloneConfig(m.config)
+	if err != nil {
+		PrintError(fmt.Sprintf("创建端口提示配置副本失败: %v", err))
+		return
+	}
+	preferRealityVision443ForDirectOnly(promptCfg, selected)
+	portOverrides := promptDirectProtocolPorts(promptCfg, selected, directProtos)
 
-	// 1. 安装 Xray-core
+	finishInstall, ok := m.beginRuntimeTransaction("Reality 组合安装")
+	if !ok {
+		return
+	}
+	criticalComplete := false
+	defer func() {
+		finishInstall(criticalComplete)
+	}()
+
+	// 1. 安装 Xray-core（仅选中 Xray/Reality 协议时需要）
 	ctx := context.Background()
-	status := m.coreMgr.GetStatus()
-	if cs, ok := status["xray"]; !ok || !cs.Installed {
-		PrintInfo("正在安装 Xray-core...")
-		if err := m.coreMgr.InstallCore(ctx, "xray"); err != nil {
-			PrintError(fmt.Sprintf("安装 Xray-core 失败: %v", err))
-			return
+	if hasXrayProto {
+		status := m.coreMgr.GetStatus()
+		if cs, ok := status["xray"]; !ok || !cs.Installed {
+			PrintInfo("正在安装 Xray-core...")
+			if err := m.coreMgr.InstallCore(ctx, "xray"); err != nil {
+				PrintError(fmt.Sprintf("安装 Xray-core 失败: %v", err))
+				return
+			}
+			PrintSuccess("Xray-core 安装完成")
+		} else {
+			PrintInfo("Xray-core 已安装，跳过")
 		}
-		PrintSuccess("Xray-core 安装完成")
-	} else {
-		PrintInfo("Xray-core 已安装，跳过")
 	}
 
 	// 2. 生成 X25519 密钥对（如果还没有）
-	if m.config.Reality.PrivateKey == "" {
+	if hasRealityProto && m.config.Reality.PrivateKey == "" {
 		PrintInfo("正在生成 X25519 密钥对...")
 		keyPair, err := security.GenerateX25519KeyPair()
 		if err != nil {
@@ -663,7 +843,7 @@ func (m *InstallMenu) installReality() {
 	}
 
 	// 3. 生成 ShortID（如果还没有）
-	if m.config.Reality.ShortID == "" {
+	if hasRealityProto && m.config.Reality.ShortID == "" {
 		shortID, err := security.GenerateShortID()
 		if err != nil {
 			PrintError(fmt.Sprintf("生成 ShortID 失败: %v", err))
@@ -673,9 +853,13 @@ func (m *InstallMenu) installReality() {
 	}
 
 	// 4. 设置默认 Reality dest 和 serverName（如果还没有）
-	if m.config.Reality.Dest == "" {
-		m.config.Reality.Dest = "www.microsoft.com:443"
-		m.config.Reality.ServerName = "www.microsoft.com"
+	if hasRealityProto && m.config.Reality.Dest == "" {
+		m.config.Reality.Dest = security.DefaultRealityDest
+		m.config.Reality.ServerName = security.DefaultRealityServerName
+		PrintInfo(fmt.Sprintf("Reality 默认伪装目标: %s", m.config.Reality.Dest))
+	}
+	if hasRealityProto {
+		ensureDefaultRealityVisionTargets(m.config, selected, portOverrides)
 	}
 
 	// 5. 记录协议
@@ -723,16 +907,6 @@ func (m *InstallMenu) installReality() {
 	}
 
 	// 6.5 安装 sing-box core（如果选择了 sing-box 协议）
-	hasSingBoxProto := false
-	hasXrayProto := false
-	for _, p := range selected {
-		switch p.CoreType() {
-		case "singbox":
-			hasSingBoxProto = true
-		case "xray":
-			hasXrayProto = true
-		}
-	}
 	if hasSingBoxProto {
 		sbStatus := m.coreMgr.GetStatus()
 		if cs, ok := sbStatus["singbox"]; !ok || !cs.Installed {
@@ -777,6 +951,7 @@ func (m *InstallMenu) installReality() {
 			Users:     apiUsers,
 			Tag:       p.Name(),
 			Reality:   &m.config.Reality,
+			ALPN:      m.config.ALPN.ALPNList(),
 			KeepAlive: m.config.Connection,
 		}
 
@@ -801,14 +976,14 @@ func (m *InstallMenu) installReality() {
 			params.ServiceName = defaultGRPCServiceName(p)
 		}
 
-		inboundJSON, err := p.GenerateInbound(params)
+		inboundJSONs, err := protocol.GenerateInboundMessages(p, params)
 		if err != nil {
 			PrintError(fmt.Sprintf("生成 %s 入站配置失败: %v", p.Name(), err))
-			continue
+			return
 		}
 
 		wrapper := map[string]interface{}{
-			"inbounds": []json.RawMessage{inboundJSON},
+			"inbounds": inboundJSONs,
 		}
 
 		// 根据核心类型写入对应目录
@@ -822,7 +997,7 @@ func (m *InstallMenu) installReality() {
 
 		if err := security.AtomicWriteJSON(confPath, wrapper, 0644); err != nil {
 			PrintError(fmt.Sprintf("写入 %s 配置失败: %v", p.Name(), err))
-			continue
+			return
 		}
 		PrintSuccess(fmt.Sprintf("%s 配置已生成", p.Name()))
 	}
@@ -830,21 +1005,23 @@ func (m *InstallMenu) installReality() {
 	// 8. 生成 Xray Stats API 配置（监控功能需要）
 	if hasXrayProto {
 		if err := protocol.GenerateStatsAPIConfig(m.config.Paths.XrayConf); err != nil {
-			m.logger.WithError(err).Warn("生成 Stats API 配置失败")
+			m.logWarn(err, "生成 Stats API 配置失败")
 		}
 		if err := protocol.GenerateStatsModuleConfig(m.config.Paths.XrayConf); err != nil {
-			m.logger.WithError(err).Warn("生成 Stats 模块配置失败")
+			m.logWarn(err, "生成 Stats 模块配置失败")
 		}
 		// 生成基础出站和 DNS 配置（Xray 转发流量必需）
-		if err := protocol.EnsureBaseConfigs(m.config.Paths.XrayConf); err != nil {
-			m.logger.WithError(err).Warn("生成 Xray 基础配置失败")
+		if err := protocol.EnsureBaseConfigs(m.config.Paths.XrayConf, m.config); err != nil {
+			PrintError(fmt.Sprintf("生成 Xray 基础配置失败: %v", err))
+			return
 		}
 	}
 
 	// 8.5 生成 sing-box 基础配置（outbound + dns + route）
 	if hasSingBoxProto {
-		if err := protocol.EnsureSingBoxBaseConfigs(m.config.Paths.SingBoxConf); err != nil {
-			m.logger.WithError(err).Warn("生成 sing-box 基础配置失败")
+		if err := protocol.EnsureSingBoxBaseConfigs(m.config.Paths.SingBoxConf, m.config); err != nil {
+			PrintError(fmt.Sprintf("生成 sing-box 基础配置失败: %v", err))
+			return
 		}
 	}
 
@@ -858,7 +1035,8 @@ func (m *InstallMenu) installReality() {
 	if hasXrayProto {
 		PrintInfo("正在启动 Xray...")
 		if err := m.coreMgr.RestartXray(); err != nil {
-			PrintWarning(fmt.Sprintf("启动 Xray 失败: %v（可能需要手动启动）", err))
+			PrintError(fmt.Sprintf("启动 Xray 失败: %v", err))
+			return
 		} else {
 			time.Sleep(2 * time.Second)
 			newStatus := m.coreMgr.GetStatus()
@@ -870,11 +1048,10 @@ func (m *InstallMenu) installReality() {
 		}
 	}
 	if hasSingBoxProto {
-		PrintInfo("正在合并 sing-box 配置并启动...")
-		if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
-			PrintError(fmt.Sprintf("sing-box 配置合并失败: %v", err))
-		} else if err := m.coreMgr.RestartSingBox(); err != nil {
-			PrintWarning(fmt.Sprintf("启动 sing-box 失败: %v（可能需要手动启动）", err))
+		PrintInfo("正在启动 sing-box...")
+		if err := m.coreMgr.RestartSingBox(); err != nil {
+			PrintError(fmt.Sprintf("启动 sing-box 失败: %v", err))
+			return
 		} else {
 			time.Sleep(2 * time.Second)
 			newStatus := m.coreMgr.GetStatus()
@@ -885,60 +1062,137 @@ func (m *InstallMenu) installReality() {
 			}
 		}
 	}
+	m.autoEnableRecommendedBBR()
+
+	criticalComplete = true
 
 	// 11. 生成订阅
-	if m.subMgr != nil {
-		_ = m.subMgr.GenerateAll()
-	}
+	subscriptionOK := m.generateSubscriptionsOrWarn()
 
 	// 12. 显示安装结果和分享链接
 	PrintSuccess("Reality 组合安装完成")
+	if !subscriptionOK {
+		PrintWarning("协议已安装，但订阅文件生成失败；下方即时分享链接和二维码仍可用于排查")
+	}
 	fmt.Println()
 	m.showRealityInfo(users)
 }
 
 // showRealityInfo 显示 Reality 配置信息和分享链接
 func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
+	showRealityInfoForUsers(m.config, m.registry, users)
+}
+
+func (m *InstallMenu) autoEnableRecommendedBBR() {
+	PrintInfo("正在检测并启用推荐网络加速: BBR + FQ...")
+	result, err := bbr.AutoEnableRecommended()
+	switch {
+	case err == nil && result.AlreadyActive:
+		PrintSuccess(result.Message)
+	case err == nil && result.Applied:
+		PrintSuccess(result.Message)
+	case err == nil && !result.Supported:
+		PrintWarning(result.Message)
+	case err != nil:
+		PrintWarning(fmt.Sprintf("自动启用 BBR + FQ 失败: %v", err))
+		if result.Message != "" {
+			PrintWarning(result.Message)
+		}
+	default:
+		PrintInfo(result.Message)
+	}
+}
+
+func (m *InstallMenu) generateSubscriptionsOrWarn() bool {
+	if m.subMgr == nil {
+		return true
+	}
+	if err := m.subMgr.GenerateAll(); err != nil {
+		PrintWarning(fmt.Sprintf("订阅生成失败: %v", err))
+		return false
+	}
+	PrintSuccess("订阅已生成")
+	return true
+}
+
+func showRealityInfoForUsers(cfg *config.Config, registry *protocol.Registry, users []*user.UserEntry) {
 	PrintTitle("连接信息")
+	if cfg == nil || registry == nil {
+		PrintWarning("缺少协议上下文，无法显示分享链接")
+		return
+	}
 
-	// 获取服务器 IP
-	serverIP := getServerIP()
-
-	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
-	PrintInfo(fmt.Sprintf("伪装域名: %s", m.config.Reality.ServerName))
-	PrintInfo(fmt.Sprintf("PublicKey: %s", m.config.Reality.PublicKey))
-	PrintInfo(fmt.Sprintf("ShortID: %s", m.config.Reality.ShortID))
+	serverIP := ""
+	resolveIP := func() (string, error) {
+		if serverIP != "" {
+			return serverIP, nil
+		}
+		ip, err := resolveDisplayServerIP(cfg)
+		if ip != "" {
+			serverIP = ip
+		}
+		return ip, err
+	}
+	if protocolsNeedDisplayIP(cfg) {
+		ip, ipErr := resolveIP()
+		if ipErr != nil {
+			PrintWarning(ipErr.Error())
+		}
+		PrintInfo(fmt.Sprintf("服务器地址: %s", ip))
+	}
+	PrintInfo(fmt.Sprintf("伪装域名: %s", cfg.Reality.ServerName))
+	PrintInfo(fmt.Sprintf("PublicKey: %s", cfg.Reality.PublicKey))
+	PrintInfo(fmt.Sprintf("ShortID: %s", cfg.Reality.ShortID))
 	fmt.Println()
 
 	// 显示所有已安装协议的分享链接
-	for _, protoName := range m.config.Protocols {
-		p, ok := m.registry.Get(protoName)
+	for _, protoName := range cfg.Protocols {
+		p, ok := registry.Get(protoName)
 		if !ok {
 			continue
 		}
 
+		mode := effectiveProtocolMode(cfg, protoName)
+		host := ""
+		if mode == "nodomain" {
+			ip, ipErr := resolveIP()
+			if ipErr != nil {
+				PrintWarning(ipErr.Error())
+			}
+			host = ip
+		} else {
+			host = cfg.GetProtocolDomain(protoName)
+			if host == "" {
+				host = cfg.TLS.Domain
+			}
+		}
+		if host == "" {
+			PrintWarning(fmt.Sprintf("%s 缺少可展示的连接地址，已跳过", protoName))
+			continue
+		}
+
 		info := &protocol.ServerInfo{
-			Host: serverIP,
-			Port: externalPortWithConfig(p, m.config),
+			Host: host,
+			Port: externalPortWithConfig(p, cfg),
+			ALPN: cfg.ALPN.ALPNList(),
 		}
 
 		// Reality 协议使用 Reality 配置
 		if strings.Contains(protoName, "reality") {
-			info.Reality = &m.config.Reality
+			info.Reality = &cfg.Reality
 		}
-		applyProtocolSpecificServerInfo(info, m.config, protoName)
+		applyProtocolSpecificServerInfo(info, cfg, protoName)
 
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
-		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
 		if mode == "nodomain" && p.CoreType() == "singbox" {
-			info.Domain = serverIP
+			info.Domain = host
 		}
 
 		// 域名模式协议使用域名
 		if mode == "domain" {
-			protoDomain := m.config.GetProtocolDomain(protoName)
+			protoDomain := cfg.GetProtocolDomain(protoName)
 			if protoDomain == "" {
-				protoDomain = m.config.TLS.Domain
+				protoDomain = cfg.TLS.Domain
 			}
 			if protoDomain != "" {
 				info.Domain = protoDomain
@@ -957,28 +1211,103 @@ func (m *InstallMenu) showRealityInfo(users []*user.UserEntry) {
 		PrintSeparator()
 		PrintInfo(fmt.Sprintf("协议: %s", protoName))
 
-		for _, u := range users {
-			apiUser := u.ToAPIUser()
-			uri := p.GenerateURI(apiUser, info)
-			if uri == "" {
-				continue
-			}
+		infos := expandRealityVisionServerInfos(protoName, info, cfg)
+		for _, oneInfo := range infos {
+			for _, u := range users {
+				apiUser := u.ToAPIUser()
+				uri := p.GenerateURI(apiUser, oneInfo)
+				if uri == "" {
+					continue
+				}
 
-			PrintInfo(fmt.Sprintf("用户: %s", u.Email))
-			PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
-			fmt.Println()
-			PrintInfo("分享链接:")
-			fmt.Printf("  %s\n", uri)
-			fmt.Println()
-			PrintInfo("二维码:")
-			fmt.Println(subscription.GenerateTerminalQR(uri))
+				PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+				PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
+				if oneInfo.Name != "" {
+					PrintInfo(fmt.Sprintf("节点: %s", oneInfo.Name))
+				}
+				fmt.Println()
+				PrintInfo("分享链接:")
+				fmt.Printf("  %s\n", uri)
+				fmt.Println()
+				PrintInfo("二维码:")
+				fmt.Println(subscription.GenerateTerminalQR(uri))
+			}
 		}
 	}
 }
 
-// getServerIP 获取服务器公网 IP
+func protocolsNeedDisplayIP(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, protoName := range cfg.Protocols {
+		if protocolNeedsDisplayIP(cfg, protoName) {
+			return true
+		}
+	}
+	return false
+}
+
+func expandRealityVisionServerInfos(protoName string, info *protocol.ServerInfo, cfg *config.Config) []*protocol.ServerInfo {
+	if protoName != "vless_reality_vision" || info == nil || cfg == nil || len(cfg.Reality.Targets) == 0 {
+		return []*protocol.ServerInfo{info}
+	}
+	targets := cfg.Reality.EffectiveTargets(info.Port)
+	infos := make([]*protocol.ServerInfo, 0, len(targets))
+	for _, target := range targets {
+		reality := cfg.Reality
+		reality.ServerName = target.ServerName
+		reality.Dest = target.Dest
+		reality.Port = target.Port
+		reality.Targets = nil
+		next := *info
+		next.Port = target.Port
+		next.Reality = &reality
+		next.Name = protocol.RealitySubscriptionName(info.Host, target, "reality")
+		infos = append(infos, &next)
+	}
+	if len(infos) == 0 {
+		return []*protocol.ServerInfo{info}
+	}
+	return infos
+}
+
+var (
+	detectPublicServerIPFunc   = detectPublicServerIP
+	detectOutboundLocalIPFunc  = detectOutboundLocalIP
+	displayServerIPPlaceholder = "YOUR_SERVER_IP"
+)
+
+func resolveDisplayServerIP(cfg *config.Config) (string, error) {
+	if cfg != nil {
+		configured := strings.TrimSpace(cfg.Subscription.ServerIP)
+		if configured != "" {
+			if net.ParseIP(configured) == nil {
+				return "", fmt.Errorf("subscription.server_ip 无效: %s", configured)
+			}
+			return configured, nil
+		}
+	}
+
+	ip, err := detectPublicServerIPFunc()
+	if err == nil {
+		return ip, nil
+	}
+
+	if localIP, localErr := detectOutboundLocalIPFunc(); localErr == nil {
+		return localIP, fmt.Errorf("公网 IP 自动探测失败，已回退到本机出站地址 %s，可能是内网 IP；建议设置 subscription.server_ip", localIP)
+	}
+
+	return displayServerIPPlaceholder, fmt.Errorf("公网 IP 自动探测失败，请设置 subscription.server_ip: %w", err)
+}
+
+// getServerIP 获取服务器公网 IP。保留给旧路径兜底；新菜单展示应使用 resolveDisplayServerIP。
 func getServerIP() string {
-	// 优先通过外部 API 获取公网 IP（阿里云等 NAT 环境下本地 IP 是内网地址）
+	ip, _ := resolveDisplayServerIP(nil)
+	return ip
+}
+
+func detectPublicServerIP() (string, error) {
 	apis := []string{
 		"https://api.ipify.org",
 		"https://ifconfig.me/ip",
@@ -997,11 +1326,13 @@ func getServerIP() string {
 		}
 		ip := strings.TrimSpace(string(body))
 		if net.ParseIP(ip) != nil {
-			return ip
+			return ip, nil
 		}
 	}
+	return "", fmt.Errorf("all public IP APIs failed")
+}
 
-	// 回退：通过出站连接获取本机 IP（可能是内网 IP）
+func detectOutboundLocalIP() (string, error) {
 	fallbackTargets := []string{
 		"www.cloudflare.com:443",
 		"www.google.com:443",
@@ -1014,11 +1345,11 @@ func getServerIP() string {
 		}
 		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
 			conn.Close()
-			return addr.IP.String()
+			return addr.IP.String(), nil
 		}
 		conn.Close()
 	}
-	return "YOUR_SERVER_IP"
+	return "", fmt.Errorf("all outbound local IP probes failed")
 }
 
 // showRealityMenu 显示 Reality 管理菜单
@@ -1027,76 +1358,17 @@ func (m *InstallMenu) showRealityMenu() {
 		PrintWarning("尚未安装 Reality 协议，请先使用一键 Reality 安装")
 		return
 	}
-	for {
-		PrintTitle("Reality 参数管理")
-		PrintInfo(fmt.Sprintf("SNI ServerName: %s", m.config.Reality.ServerName))
-		PrintInfo(fmt.Sprintf("伪装目标 Dest: %s", m.config.Reality.Dest))
-		PrintInfo(fmt.Sprintf("监听端口: %s", formatRealityPorts(m.config)))
-		PrintSeparator()
-		PrintOption(1, "修改 Reality 伪装目标")
-		PrintOption(2, "查看密钥和连接信息")
-		PrintOption(3, "重新生成密钥对")
-		PrintOptionStr("0", "返回")
+	NewProtocolMenus(m.config, m.coreMgr, m.registry, m.subMgr, m.userMgr, nil, m.logger).ShowReality()
+}
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3"})
-		switch choice {
-		case "1":
-			dest := ReadInput("请输入新的伪装域名（只填域名或 域名:端口，不要带 http:// 或 https://，如 www.apple.com）")
-			if dest != "" {
-				if strings.Contains(dest, "://") {
-					PrintError("伪装域名不要带 http:// 或 https://")
-					continue
-				}
-				if !strings.Contains(dest, ":") {
-					dest = dest + ":443"
-				}
-				serverName := strings.Split(dest, ":")[0]
-				m.config.Reality.Dest = dest
-				m.config.Reality.ServerName = serverName
-				if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
-					PrintError(fmt.Sprintf("保存失败: %v", err))
-				} else {
-					PrintSuccess(fmt.Sprintf("伪装域名已更新: %s", serverName))
-					PrintWarning("修改后需要重启 Xray 才能生效")
-				}
-			}
-		case "2":
-			PrintInfo(fmt.Sprintf("PublicKey:   %s", m.config.Reality.PublicKey))
-			PrintInfo(fmt.Sprintf("ShortID:     %s", m.config.Reality.ShortID))
-			PrintInfo(fmt.Sprintf("ServerName:  %s", m.config.Reality.ServerName))
-			PrintInfo(fmt.Sprintf("Dest:        %s", m.config.Reality.Dest))
-			fmt.Println()
-			// 显示分享链接
-			users := m.userMgr.GetAllUsers()
-			if len(users) > 0 {
-				m.showRealityInfo(users)
-			}
-		case "3":
-			if !Confirm("重新生成密钥对将导致所有客户端需要更新配置，确认?") {
-				continue
-			}
-			keyPair, err := security.GenerateX25519KeyPair()
-			if err != nil {
-				PrintError(fmt.Sprintf("生成密钥对失败: %v", err))
-				continue
-			}
-			shortID, err := security.GenerateShortID()
-			if err != nil {
-				PrintError(fmt.Sprintf("生成 ShortID 失败: %v", err))
-				continue
-			}
-			m.config.Reality.PrivateKey = keyPair.PrivateKey
-			m.config.Reality.PublicKey = keyPair.PublicKey
-			m.config.Reality.ShortID = shortID
-			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
-				PrintError(fmt.Sprintf("保存失败: %v", err))
-			} else {
-				PrintSuccess("密钥对和 ShortID 已重新生成")
-				PrintWarning("修改后需要重启 Xray 才能生效")
-			}
-		case "0":
-			return
-		}
+func printRealityDestWarnings(serverName string) {
+	result, err := security.ValidateRealityDest(serverName)
+	if err != nil {
+		PrintWarning(fmt.Sprintf("Reality 伪装目标校验失败: %v", err))
+		return
+	}
+	for _, warning := range result.Warnings {
+		PrintWarning(fmt.Sprintf("Reality 伪装目标提示: %s", warning))
 	}
 }
 
@@ -1131,7 +1403,17 @@ func (m *InstallMenu) showInstalled() {
 		return
 	}
 
-	serverIP := getServerIP()
+	serverIP := ""
+	resolveIP := func() (string, error) {
+		if serverIP != "" {
+			return serverIP, nil
+		}
+		ip, err := resolveDisplayServerIP(m.config)
+		if ip != "" {
+			serverIP = ip
+		}
+		return ip, err
+	}
 
 	for _, protoName := range m.config.Protocols {
 		p, ok := m.registry.Get(protoName)
@@ -1141,10 +1423,29 @@ func (m *InstallMenu) showInstalled() {
 
 		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
 
+		host := ""
+		if mode == "nodomain" {
+			ip, ipErr := resolveIP()
+			if ipErr != nil {
+				PrintWarning(ipErr.Error())
+			}
+			host = ip
+		} else {
+			host = m.config.GetProtocolDomain(protoName)
+			if host == "" {
+				host = m.config.TLS.Domain
+			}
+		}
+		if host == "" {
+			PrintWarning(fmt.Sprintf("%s 缺少可展示的连接地址，已跳过", protoName))
+			continue
+		}
+
 		// 构建 ServerInfo
 		info := &protocol.ServerInfo{
-			Host: serverIP,
+			Host: host,
 			Port: externalPortWithConfig(p, m.config),
+			ALPN: m.config.ALPN.ALPNList(),
 		}
 
 		// 根据安装模式填充不同字段
@@ -1166,7 +1467,7 @@ func (m *InstallMenu) showInstalled() {
 		applyProtocolSpecificServerInfo(info, m.config, protoName)
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
 		if mode == "nodomain" && p.CoreType() == "singbox" {
-			info.Domain = serverIP
+			info.Domain = host
 		}
 
 		// WS/HTTPUpgrade/gRPC/XHTTP 路径
@@ -1182,19 +1483,24 @@ func (m *InstallMenu) showInstalled() {
 		PrintSeparator()
 		PrintInfo(fmt.Sprintf("协议: %s", protoName))
 
-		for _, u := range users {
-			apiUser := u.ToAPIUser()
-			uri := p.GenerateURI(apiUser, info)
-			if uri == "" {
-				continue
-			}
+		for _, oneInfo := range expandRealityVisionServerInfos(protoName, info, m.config) {
+			for _, u := range users {
+				apiUser := u.ToAPIUser()
+				uri := p.GenerateURI(apiUser, oneInfo)
+				if uri == "" {
+					continue
+				}
 
-			PrintInfo(fmt.Sprintf("用户: %s", u.Email))
-			PrintInfo("分享链接:")
-			fmt.Printf("  %s\n", uri)
-			fmt.Println()
-			PrintInfo("二维码:")
-			fmt.Println(subscription.GenerateTerminalQR(uri))
+				PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+				if oneInfo.Name != "" {
+					PrintInfo(fmt.Sprintf("节点: %s", oneInfo.Name))
+				}
+				PrintInfo("分享链接:")
+				fmt.Printf("  %s\n", uri)
+				fmt.Println()
+				PrintInfo("二维码:")
+				fmt.Println(subscription.GenerateTerminalQR(uri))
+			}
 		}
 	}
 }
@@ -1243,15 +1549,29 @@ func (m *InstallMenu) uninstallProtocol() {
 		return
 	}
 
-	// 收集需要重启的核心
+	finishUninstall, ok := m.beginRuntimeTransaction("协议卸载")
+	if !ok {
+		return
+	}
+	criticalComplete := false
+	defer func() {
+		finishUninstall(criticalComplete)
+	}()
+
 	needRestartXray := false
 	needRestartSingBox := false
+	nginxChanged := false
+	var nginxTx *nginx.ConfigTransaction
+	if m.nginxMgr != nil {
+		nginxTx = m.nginxMgr.BeginConfigTransaction()
+	}
 
 	for _, name := range names {
 		// 1. 删除 Xray 入站配置文件
 		xrayConfFile := filepath.Join(m.config.Paths.XrayConf, fmt.Sprintf("05_%s_inbounds.json", name))
 		if err := os.Remove(xrayConfFile); err != nil && !os.IsNotExist(err) {
-			m.logger.WithError(err).Warnf("删除 Xray 配置文件失败: %s", xrayConfFile)
+			PrintError(fmt.Sprintf("删除 Xray 配置文件失败: %v", err))
+			return
 		} else if err == nil {
 			PrintInfo(fmt.Sprintf("已删除 Xray 配置: %s", xrayConfFile))
 			needRestartXray = true
@@ -1260,14 +1580,18 @@ func (m *InstallMenu) uninstallProtocol() {
 		// 2. 删除 sing-box 入站配置文件（两种命名格式都尝试删除）
 		singboxConfFile := filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("10_%s_inbounds.json", name))
 		if err := os.Remove(singboxConfFile); err != nil && !os.IsNotExist(err) {
-			m.logger.WithError(err).Warnf("删除 sing-box 配置文件失败: %s", singboxConfFile)
+			PrintError(fmt.Sprintf("删除 sing-box 配置文件失败: %v", err))
+			return
 		} else if err == nil {
 			PrintInfo(fmt.Sprintf("已删除 sing-box 配置: %s", singboxConfFile))
 			needRestartSingBox = true
 		}
 		// 兼容旧版命名格式
 		singboxConfFileOld := filepath.Join(m.config.Paths.SingBoxConf, fmt.Sprintf("%s.json", name))
-		if err := os.Remove(singboxConfFileOld); err == nil {
+		if err := os.Remove(singboxConfFileOld); err != nil && !os.IsNotExist(err) {
+			PrintError(fmt.Sprintf("删除旧版 sing-box 配置文件失败: %v", err))
+			return
+		} else if err == nil {
 			PrintInfo(fmt.Sprintf("已删除 sing-box 配置: %s", singboxConfFileOld))
 			needRestartSingBox = true
 		}
@@ -1275,6 +1599,10 @@ func (m *InstallMenu) uninstallProtocol() {
 		// 3. 删除 Nginx 反代 location（如果是需要 Nginx 的协议）
 		if p, ok := m.registry.Get(name); ok {
 			if needsNginxProxy(p) {
+				if nginxTx == nil {
+					PrintError("Nginx 管理器未初始化，无法安全删除反代配置")
+					return
+				}
 				// 使用协议独立域名或全局域名
 				protoDomain := m.config.GetProtocolDomain(name)
 				if protoDomain != "" {
@@ -1282,11 +1610,12 @@ func (m *InstallMenu) uninstallProtocol() {
 					if p.TransportType() == "grpc" {
 						locationPath = defaultGRPCServiceName(p)
 					}
-					if err := m.nginxMgr.RemoveLocationByPath(protoDomain, p.TransportType(), locationPath); err != nil {
-						m.logger.WithError(err).Warnf("删除 Nginx location 失败: %s", name)
-					} else {
-						PrintInfo(fmt.Sprintf("已删除 Nginx 反代配置: %s", name))
+					if err := nginxTx.RemoveLocationByPath(protoDomain, p.TransportType(), locationPath); err != nil {
+						PrintError(fmt.Sprintf("删除 Nginx 反代配置失败: %v", err))
+						return
 					}
+					nginxChanged = true
+					PrintInfo(fmt.Sprintf("已删除 Nginx 反代配置: %s", name))
 				}
 			}
 			// 标记对应核心需要重启
@@ -1307,8 +1636,6 @@ func (m *InstallMenu) uninstallProtocol() {
 		delete(m.config.ProtocolModes, name)
 		delete(m.config.ProtocolDomains, name)
 		delete(m.config.ProtocolPorts, name)
-
-		PrintSuccess(fmt.Sprintf("%s 已卸载", name))
 	}
 
 	// 5. 保存配置
@@ -1336,38 +1663,54 @@ func (m *InstallMenu) uninstallProtocol() {
 		if hasXray {
 			PrintInfo("正在重启 Xray...")
 			if err := m.coreMgr.RestartXray(); err != nil {
-				PrintWarning(fmt.Sprintf("重启 Xray 失败: %v", err))
-			} else {
-				PrintSuccess("Xray 已重启")
+				PrintError(fmt.Sprintf("重启 Xray 失败: %v", err))
+				return
 			}
+			PrintSuccess("Xray 已重启")
 		} else {
 			PrintInfo("已无 Xray 协议，正在停止 Xray...")
 			// 清理 Stats API 配置
 			_ = protocol.RemoveStatsAPIConfig(m.config.Paths.XrayConf)
-			_ = m.coreMgr.StopXray()
+			if err := m.coreMgr.StopXray(); err != nil {
+				PrintError(fmt.Sprintf("停止 Xray 失败: %v", err))
+				return
+			}
 			PrintSuccess("Xray 已停止")
 		}
 	}
 	if needRestartSingBox {
 		if hasSingBox {
 			PrintInfo("正在重启 sing-box...")
-			if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
-				PrintWarning(fmt.Sprintf("sing-box 配置合并失败: %v", err))
-			} else if err := m.coreMgr.RestartSingBox(); err != nil {
-				PrintWarning(fmt.Sprintf("重启 sing-box 失败: %v", err))
-			} else {
-				PrintSuccess("sing-box 已重启")
+			if err := m.coreMgr.RestartSingBox(); err != nil {
+				PrintError(fmt.Sprintf("重启 sing-box 失败: %v", err))
+				return
 			}
+			PrintSuccess("sing-box 已重启")
 		} else {
 			PrintInfo("已无 sing-box 协议，正在停止 sing-box...")
-			_ = m.coreMgr.StopSingBox()
+			if err := m.coreMgr.StopSingBox(); err != nil {
+				PrintError(fmt.Sprintf("停止 sing-box 失败: %v", err))
+				return
+			}
 			PrintSuccess("sing-box 已停止")
 		}
 	}
 
 	// 8. 重载 Nginx（如果有改动）
-	if m.config.TLS.Domain != "" {
-		_ = m.nginxMgr.Reload()
+	if nginxChanged {
+		if err := nginxTx.Reload(); err != nil {
+			PrintError(fmt.Sprintf("重载 Nginx 失败: %v", err))
+			return
+		}
+		PrintSuccess("Nginx 已重载")
+	}
+
+	criticalComplete = true
+	for _, name := range names {
+		PrintSuccess(fmt.Sprintf("%s 已卸载", name))
+	}
+	if !m.generateSubscriptionsOrWarn() {
+		PrintWarning("协议已卸载，但订阅刷新失败；请不要继续使用旧订阅")
 	}
 }
 
@@ -1385,6 +1728,14 @@ func inferProtocolMode(modes map[string]string, name string) string {
 	return "domain"
 }
 
+func effectiveProtocolMode(cfg *config.Config, name string) string {
+	return config.EffectiveProtocolMode(cfg, name)
+}
+
+func protocolNeedsDisplayIP(cfg *config.Config, name string) bool {
+	return effectiveProtocolMode(cfg, name) == "nodomain"
+}
+
 // protocolLabel 生成协议的描述标签
 func protocolLabel(p protocol.Protocol) string {
 	name := p.Name()
@@ -1392,7 +1743,7 @@ func protocolLabel(p protocol.Protocol) string {
 
 	switch name {
 	case "vless_reality_vision":
-		return "(" + core + " Reality Vision 推荐)"
+		return "(" + core + " Reality Vision 首选)"
 	case "vless_reality_grpc":
 		return "(" + core + " Reality gRPC)"
 	case "vless_reality_xhttp":
@@ -1416,7 +1767,7 @@ func protocolLabel(p protocol.Protocol) string {
 	case "tuic":
 		return "(" + core + " TUIC)"
 	case "anytls":
-		return "(" + core + " AnyTLS 推荐)"
+		return "(" + core + " AnyTLS 备选)"
 	case "naive":
 		return "(" + core + " NaïveProxy)"
 	case "socks5":
@@ -1488,7 +1839,7 @@ func promptDirectProtocolPorts(cfg *config.Config, allSelected, directProtos []p
 			usedPorts[port] = owner
 		}
 	}
-	if hasNginxProxyProtocol(cfg, allSelected) {
+	if reservesNginxPublicPorts(cfg, allSelected) {
 		reservePort(80, "Nginx HTTP")
 		reservePort(443, "Nginx HTTPS")
 	}
@@ -1525,16 +1876,30 @@ func promptDirectProtocolPorts(cfg *config.Config, allSelected, directProtos []p
 				}
 			}
 
-			if owner, exists := usedPorts[port]; exists {
-				PrintError(fmt.Sprintf("端口 %d 已被 %s 使用，请为 %s 换一个端口", port, owner, p.Name()))
+			candidatePorts := []int{port}
+			if p.Name() == "vless_reality_vision" {
+				candidatePorts = realityVisionCandidatePorts(cfg, port)
+			}
+			conflict := false
+			for _, candidatePort := range candidatePorts {
+				if owner, exists := usedPorts[candidatePort]; exists {
+					PrintError(fmt.Sprintf("端口 %d 已被 %s 使用，请为 %s 换一个端口", candidatePort, owner, p.Name()))
+					conflict = true
+					break
+				}
+			}
+			if conflict {
 				continue
 			}
 
-			usedPorts[port] = p.Name()
-			if port != defPort {
-				portOverrides[p.Name()] = port
+			for _, candidatePort := range candidatePorts {
+				usedPorts[candidatePort] = p.Name()
 			}
+			portOverrides[p.Name()] = port
 			PrintInfo(fmt.Sprintf("%s 将监听端口: %d", p.Name(), port))
+			if p.Name() == "vless_reality_vision" && len(candidatePorts) > 1 {
+				PrintInfo(fmt.Sprintf("vless_reality_vision 目标池将占用端口: %s", formatPortList(candidatePorts)))
+			}
 			break
 		}
 	}
@@ -1550,9 +1915,56 @@ func promptDirectProtocolPorts(cfg *config.Config, allSelected, directProtos []p
 	return portOverrides
 }
 
+func realityVisionCandidatePorts(cfg *config.Config, basePort int) []int {
+	if cfg != nil && len(cfg.Reality.Targets) > 0 {
+		targets := cfg.Reality.EffectiveTargets(basePort)
+		ports := make([]int, 0, len(targets))
+		for _, target := range targets {
+			ports = append(ports, target.Port)
+		}
+		return ports
+	}
+	names := security.DefaultRealityTargetServerNames()
+	ports := make([]int, 0, len(names))
+	for i := range names {
+		ports = append(ports, basePort+i)
+	}
+	return ports
+}
+
+func preferRealityVision443ForDirectOnly(cfg *config.Config, selected []protocol.Protocol) {
+	if cfg == nil || !containsProtocol(selected, "vless_reality_vision") || reservesNginxPublicPorts(cfg, selected) {
+		return
+	}
+	if cfg.ProtocolPorts == nil {
+		cfg.ProtocolPorts = make(map[string]int)
+	}
+	if cfg.ProtocolPorts["vless_reality_vision"] == 0 {
+		cfg.ProtocolPorts["vless_reality_vision"] = 443
+	}
+}
+
+func reservesNginxPublicPorts(cfg *config.Config, selected []protocol.Protocol) bool {
+	if hasNginxProxyProtocol(cfg, selected) {
+		return true
+	}
+	return cfg != nil && strings.TrimSpace(cfg.Subscription.Domain) != ""
+}
+
+func formatPortList(ports []int) string {
+	parts := make([]string, 0, len(ports))
+	for _, port := range ports {
+		parts = append(parts, fmt.Sprintf("%d", port))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func formatRealityPorts(cfg *config.Config) string {
 	if cfg == nil {
 		return "未配置"
+	}
+	if len(cfg.Reality.Targets) > 0 && configHasProtocol(cfg, "vless_reality_vision") {
+		return formatRealityTargetPool(cfg)
 	}
 
 	var parts []string
@@ -1569,6 +1981,76 @@ func formatRealityPorts(cfg *config.Config) string {
 			return fmt.Sprintf("%d", cfg.Reality.Port)
 		}
 		return "未安装 Reality 协议"
+	}
+	return strings.Join(parts, "，")
+}
+
+func ensureDefaultRealityVisionTargets(cfg *config.Config, selected []protocol.Protocol, portOverrides map[string]int) {
+	if cfg == nil || !containsProtocol(selected, "vless_reality_vision") {
+		return
+	}
+	basePort := configuredProtocolPort(cfg, "vless_reality_vision", defaultProtocolPort("vless_reality_vision"))
+	if p, ok := portOverrides["vless_reality_vision"]; ok && p > 0 {
+		basePort = p
+	}
+	if cfg.Reality.EnsureDefaultTargets(basePort) {
+		PrintInfo("Reality Vision 已启用默认 5 个伪装目标池（每个目标独立端口）")
+	}
+	PrintInfo(fmt.Sprintf("Reality Vision 目标池: %s", formatRealityTargetPool(cfg)))
+}
+
+func containsProtocol(protocols []protocol.Protocol, name string) bool {
+	for _, p := range protocols {
+		if p.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedProtocolRuntimeFlags(selected []protocol.Protocol) (hasSingBox, hasXray, hasReality bool) {
+	for _, p := range selected {
+		switch p.CoreType() {
+		case "singbox":
+			hasSingBox = true
+		case "xray":
+			hasXray = true
+		}
+		if strings.Contains(p.Name(), "reality") {
+			hasReality = true
+		}
+	}
+	return hasSingBox, hasXray, hasReality
+}
+
+func configHasProtocol(cfg *config.Config, name string) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, protoName := range cfg.Protocols {
+		if protoName == name {
+			return true
+		}
+	}
+	return false
+}
+
+func formatRealityTargetPool(cfg *config.Config) string {
+	if cfg == nil {
+		return "未配置"
+	}
+	basePort := configuredProtocolPort(cfg, "vless_reality_vision", defaultProtocolPort("vless_reality_vision"))
+	targets := cfg.Reality.EffectiveTargets(basePort)
+	if len(targets) == 0 {
+		return "未配置"
+	}
+	parts := make([]string, 0, len(targets))
+	for _, target := range targets {
+		label := target.Name
+		if label == "" {
+			label = config.RealityTargetName(target.ServerName)
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s:%d", label, target.ServerName, target.Port))
 	}
 	return strings.Join(parts, "，")
 }
@@ -1814,7 +2296,7 @@ func (m *InstallMenu) inlineIssueCert(domain string) (certFile, keyFile string) 
 		"--cert-file", filepath.Join(tlsDir, domain+".crt"),
 		"--key-file", filepath.Join(tlsDir, domain+".key"),
 		"--fullchain-file", filepath.Join(tlsDir, domain+".fullchain.crt"),
-		"--reloadcmd", "systemctl restart VasmaX",
+		"--reloadcmd", "true",
 	}
 	installCmd := exec.Command(acmePath, installArgs...)
 	installCmd.Stdout = os.Stdout
@@ -1855,7 +2337,7 @@ func (m *InstallMenu) installAcmeCertToTLS(domain string) (certFile, keyFile str
 		"--cert-file", filepath.Join(tlsDir, domain+".crt"),
 		"--key-file", filepath.Join(tlsDir, domain+".key"),
 		"--fullchain-file", filepath.Join(tlsDir, domain+".fullchain.crt"),
-		"--reloadcmd", "systemctl restart VasmaX",
+		"--reloadcmd", "true",
 	}
 	cmd := exec.Command(acmePath, installArgs...)
 	cmd.Stdout = os.Stdout
@@ -1875,10 +2357,19 @@ func (m *InstallMenu) installAcmeCertToTLS(domain string) (certFile, keyFile str
 func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 	PrintTitle("连接信息")
 
-	serverIP := getServerIP()
-	PrintInfo(fmt.Sprintf("服务器地址: %s", serverIP))
 	PrintInfo(fmt.Sprintf("主域名: %s", domain))
 	fmt.Println()
+	serverIP := ""
+	resolveIP := func() (string, error) {
+		if serverIP != "" {
+			return serverIP, nil
+		}
+		ip, err := resolveDisplayServerIP(m.config)
+		if ip != "" {
+			serverIP = ip
+		}
+		return ip, err
+	}
 
 	for _, protoName := range m.config.Protocols {
 		p, ok := m.registry.Get(protoName)
@@ -1888,9 +2379,28 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 
 		mode := inferProtocolMode(m.config.ProtocolModes, protoName)
 
+		host := ""
+		if mode == "nodomain" {
+			ip, ipErr := resolveIP()
+			if ipErr != nil {
+				PrintWarning(ipErr.Error())
+			}
+			host = ip
+		} else {
+			host = m.config.GetProtocolDomain(protoName)
+			if host == "" {
+				host = domain
+			}
+		}
+		if host == "" {
+			PrintWarning(fmt.Sprintf("%s 缺少可展示的连接地址，已跳过", protoName))
+			continue
+		}
+
 		info := &protocol.ServerInfo{
-			Host: serverIP,
+			Host: host,
 			Port: externalPortWithConfig(p, m.config),
+			ALPN: m.config.ALPN.ALPNList(),
 		}
 
 		// 域名模式协议使用协议独立域名（优先）或全局域名
@@ -1913,7 +2423,7 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 
 		// 无域名模式下 sing-box 协议用 IP 作为 Domain
 		if mode == "nodomain" && p.CoreType() == "singbox" {
-			info.Domain = serverIP
+			info.Domain = host
 		}
 
 		// WS/HTTPUpgrade/gRPC/XHTTP 路径
@@ -1933,27 +2443,32 @@ func (m *InstallMenu) showDomainInfo(users []*user.UserEntry, domain string) {
 			PrintInfo(fmt.Sprintf("协议: %s", protoName))
 		}
 
-		for _, u := range users {
-			apiUser := u.ToAPIUser()
-			uri := p.GenerateURI(apiUser, info)
-			if uri == "" {
-				continue
-			}
+		for _, oneInfo := range expandRealityVisionServerInfos(protoName, info, m.config) {
+			for _, u := range users {
+				apiUser := u.ToAPIUser()
+				uri := p.GenerateURI(apiUser, oneInfo)
+				if uri == "" {
+					continue
+				}
 
-			PrintInfo(fmt.Sprintf("用户: %s", u.Email))
-			PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
-			fmt.Println()
-			PrintInfo("分享链接:")
-			fmt.Printf("  %s\n", uri)
-			fmt.Println()
-			PrintInfo("二维码:")
-			fmt.Println(subscription.GenerateTerminalQR(uri))
+				PrintInfo(fmt.Sprintf("用户: %s", u.Email))
+				PrintInfo(fmt.Sprintf("UUID: %s", u.UUID))
+				if oneInfo.Name != "" {
+					PrintInfo(fmt.Sprintf("节点: %s", oneInfo.Name))
+				}
+				fmt.Println()
+				PrintInfo("分享链接:")
+				fmt.Printf("  %s\n", uri)
+				fmt.Println()
+				PrintInfo("二维码:")
+				fmt.Println(subscription.GenerateTerminalQR(uri))
+			}
 		}
 	}
 }
 
 // autoConfigNginx 安装协议后自动配置 Nginx 反向代理
-func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain string) {
+func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain string) error {
 	// 收集需要 Nginx 反代的协议
 	var locations []nginx.ProtocolLocation
 	for _, p := range installed {
@@ -1963,7 +2478,7 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 		transport := p.TransportType()
 		loc := nginx.ProtocolLocation{
 			Type:        transport,
-			BackendPort: p.DefaultPort(),
+			BackendPort: configuredProtocolPort(m.config, p.Name(), p.DefaultPort()),
 		}
 		if transport == "grpc" {
 			loc.Path = defaultGRPCServiceName(p)
@@ -1974,25 +2489,27 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 	}
 
 	if len(locations) == 0 {
-		return
+		return nil
 	}
 
 	// 需要域名和证书
 	if domain == "" {
-		PrintWarning("未配置域名，跳过 Nginx 自动配置")
-		return
+		return fmt.Errorf("未配置域名，无法生成 Nginx 反代配置")
 	}
 
 	certFile := m.config.TLS.CertFile
 	keyFile := m.config.TLS.KeyFile
-	if certFile == "" || keyFile == "" {
-		// 尝试检测证书路径
-		certFile, keyFile = config.DetectCertPath(&m.config.TLS)
+	if !strings.EqualFold(strings.TrimSpace(m.config.TLS.Domain), strings.TrimSpace(domain)) {
+		certFile = ""
+		keyFile = ""
 	}
 	if certFile == "" || keyFile == "" {
-		PrintWarning("未找到 TLS 证书，跳过 Nginx 自动配置")
-		PrintInfo("请先通过 TLS 证书管理申请证书，然后重新安装协议")
-		return
+		// 尝试检测证书路径
+		tlsCfg := tlsConfigForDomain(m.config.TLS, domain)
+		certFile, keyFile = config.DetectCertPath(&tlsCfg)
+	}
+	if certFile == "" || keyFile == "" {
+		return fmt.Errorf("未找到 %s 的 TLS 证书，请先通过 TLS 证书管理申请证书", domain)
 	}
 
 	// 检测 Nginx 版本，如果太旧则自动升级
@@ -2001,9 +2518,7 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 		PrintWarning(fmt.Sprintf("Nginx 版本过低（%s），需要 1.25.1+ 才支持 http2 指令", oldVer))
 		PrintInfo("正在自动升级 Nginx 到最新稳定版...")
 		if err := nginx.UpgradeNginx(); err != nil {
-			PrintError(fmt.Sprintf("Nginx 升级失败: %v", err))
-			PrintInfo("请手动升级 Nginx 后重新安装协议")
-			return
+			return fmt.Errorf("Nginx 升级失败: %w", err)
 		}
 		newVer := nginx.NginxVersionString()
 		PrintSuccess(fmt.Sprintf("Nginx 已升级: %s → %s", oldVer, newVer))
@@ -2020,21 +2535,24 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 		Connection:            m.config.Connection,
 	}
 
-	if err := m.nginxMgr.GenerateConfig(params); err != nil {
-		PrintError(fmt.Sprintf("生成 Nginx 配置失败: %v", err))
-		return
+	tx := m.nginxMgr.BeginConfigTransaction()
+	if err := tx.GenerateConfig(params); err != nil {
+		return fmt.Errorf("生成 Nginx 配置失败: %w", err)
+	}
+	if err := tx.Reload(); err != nil {
+		return fmt.Errorf("Nginx 重载失败，请手动检查 Nginx 配置 nginx -t: %w", err)
 	}
 
 	// 配置订阅路径
-	if err := m.nginxMgr.SetupSubscribeServer(domain); err != nil {
-		m.logger.WithError(err).Warn("配置订阅路径失败")
-	}
-
-	// 验证并重载 Nginx
-	if err := m.nginxMgr.Reload(); err != nil {
-		PrintError(fmt.Sprintf("Nginx 重载失败: %v", err))
-		PrintInfo("请手动检查 Nginx 配置: nginx -t")
-		return
+	subTx := m.nginxMgr.BeginConfigTransaction()
+	if err := subTx.SetupSubscribeServer(domain); err != nil {
+		if m.logger != nil {
+			m.logWarn(err, "配置订阅路径失败")
+		}
+	} else if err := subTx.Reload(); err != nil {
+		if m.logger != nil {
+			m.logWarn(err, "重载订阅路径失败")
+		}
 	}
 
 	PrintSuccess("Nginx 反向代理已自动配置")
@@ -2045,10 +2563,20 @@ func (m *InstallMenu) autoConfigNginx(installed []protocol.Protocol, domain stri
 			PrintInfo(fmt.Sprintf("  %s → http://127.0.0.1:%d%s", loc.Type, loc.BackendPort, loc.Path))
 		}
 	}
+	return nil
+}
+
+func domainNeedsNginxProxy(installed []protocol.Protocol, protocolDomains map[string]string, domain string) bool {
+	for _, p := range installed {
+		if needsNginxProxy(p) && protocolDomains[p.Name()] == domain {
+			return true
+		}
+	}
+	return false
 }
 
 // autoConfigNginxMultiDomain 支持多域名的 Nginx 自动配置
-func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, protocolDomains map[string]string, domainCerts map[string]*certPair) {
+func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, protocolDomains map[string]string, domainCerts map[string]*certPair) error {
 	// 按域名分组收集需要 Nginx 反代的协议
 	type domainGroup struct {
 		domain    string
@@ -2065,7 +2593,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 		}
 		domain := protocolDomains[p.Name()]
 		if domain == "" {
-			continue
+			return fmt.Errorf("%s 需要 Nginx 反代，但未配置绑定域名", p.Name())
 		}
 		if _, ok := groups[domain]; !ok {
 			groups[domain] = &domainGroup{domain: domain}
@@ -2078,7 +2606,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 		transport := p.TransportType()
 		loc := nginx.ProtocolLocation{
 			Type:        transport,
-			BackendPort: p.DefaultPort(),
+			BackendPort: configuredProtocolPort(m.config, p.Name(), p.DefaultPort()),
 		}
 		if transport == "grpc" {
 			loc.Path = defaultGRPCServiceName(p)
@@ -2089,7 +2617,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 	}
 
 	if len(groups) == 0 {
-		return
+		return nil
 	}
 
 	// 检测 Nginx 版本，如果太旧则自动升级
@@ -2098,9 +2626,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 		PrintWarning(fmt.Sprintf("Nginx 版本过低（%s），需要 1.25.1+ 才支持 http2 指令", oldVer))
 		PrintInfo("正在自动升级 Nginx 到最新稳定版...")
 		if err := nginx.UpgradeNginx(); err != nil {
-			PrintError(fmt.Sprintf("Nginx 升级失败: %v", err))
-			PrintInfo("请手动升级 Nginx 后重新安装协议")
-			return
+			return fmt.Errorf("Nginx 升级失败: %w", err)
 		}
 		newVer := nginx.NginxVersionString()
 		PrintSuccess(fmt.Sprintf("Nginx 已升级: %s → %s", oldVer, newVer))
@@ -2108,22 +2634,24 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 
 	PrintInfo("正在自动配置 Nginx 反向代理...")
 
+	tx := m.nginxMgr.BeginConfigTransaction()
 	for _, domain := range domainOrder {
 		g := groups[domain]
 		certFile := g.certFile
 		keyFile := g.keyFile
 		if certFile == "" || keyFile == "" {
 			// 尝试从全局配置检测
-			certFile = m.config.TLS.CertFile
-			keyFile = m.config.TLS.KeyFile
+			if strings.EqualFold(strings.TrimSpace(m.config.TLS.Domain), strings.TrimSpace(domain)) {
+				certFile = m.config.TLS.CertFile
+				keyFile = m.config.TLS.KeyFile
+			}
 		}
 		if certFile == "" || keyFile == "" {
-			tlsCfg := config.TLSConfig{Domain: domain}
+			tlsCfg := tlsConfigForDomain(m.config.TLS, domain)
 			certFile, keyFile = config.DetectCertPath(&tlsCfg)
 		}
 		if certFile == "" || keyFile == "" {
-			PrintWarning(fmt.Sprintf("未找到 %s 的 TLS 证书，跳过该域名的 Nginx 配置", domain))
-			continue
+			return fmt.Errorf("未找到 %s 的 TLS 证书", domain)
 		}
 
 		params := &nginx.NginxParams{
@@ -2135,22 +2663,27 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 			Connection:            m.config.Connection,
 		}
 
-		if err := m.nginxMgr.GenerateConfig(params); err != nil {
-			PrintError(fmt.Sprintf("生成 %s 的 Nginx 配置失败: %v", domain, err))
-			continue
-		}
-
-		// 配置订阅路径（只在主域名上配置）
-		if err := m.nginxMgr.SetupSubscribeServer(domain); err != nil {
-			m.logger.WithError(err).Warn("配置订阅路径失败")
+		if err := tx.GenerateConfig(params); err != nil {
+			return fmt.Errorf("生成 %s 的 Nginx 配置失败: %w", domain, err)
 		}
 	}
 
 	// 验证并重载 Nginx
-	if err := m.nginxMgr.Reload(); err != nil {
-		PrintError(fmt.Sprintf("Nginx 重载失败: %v", err))
-		PrintInfo("请手动检查 Nginx 配置: nginx -t")
-		return
+	if err := tx.Reload(); err != nil {
+		return fmt.Errorf("Nginx 重载失败，请手动检查 Nginx 配置 nginx -t: %w", err)
+	}
+
+	for _, domain := range domainOrder {
+		subTx := m.nginxMgr.BeginConfigTransaction()
+		if err := subTx.SetupSubscribeServer(domain); err != nil {
+			if m.logger != nil {
+				m.logWarn(err, "配置订阅路径失败")
+			}
+		} else if err := subTx.Reload(); err != nil {
+			if m.logger != nil {
+				m.logWarn(err, "重载订阅路径失败")
+			}
+		}
 	}
 
 	PrintSuccess("Nginx 反向代理已自动配置")
@@ -2167,6 +2700,7 @@ func (m *InstallMenu) autoConfigNginxMultiDomain(installed []protocol.Protocol, 
 			}
 		}
 	}
+	return nil
 }
 
 // migrateInboundPorts 检查并修正旧版本生成的 inbound 配置文件端口
@@ -2177,9 +2711,35 @@ func (m *InstallMenu) migrateInboundPorts() {
 		return
 	}
 
+	cfgBefore, cfgErr := cloneConfig(m.config)
+	if cfgErr != nil {
+		m.logWarn(cfgErr, "创建端口迁移配置快照失败，跳过自动迁移")
+		return
+	}
+	fileBackups := make(map[string][]byte)
 	needRestartXray := false
 	needRestartSingBox := false
 	changed := false
+	rollbackMigration := func(reason error) {
+		PrintWarning(fmt.Sprintf("端口自动迁移未完成，正在回滚: %v", reason))
+		if err := restoreMigrationFileBackups(fileBackups); err != nil {
+			PrintWarning(fmt.Sprintf("恢复旧 inbound 配置失败，请手动检查: %v", err))
+		}
+		if cfgBefore != nil {
+			*m.config = *cfgBefore
+			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				PrintWarning(fmt.Sprintf("恢复旧端口配置失败，请手动检查 config.yaml: %v", err))
+			}
+		}
+		if m.coreMgr != nil {
+			if needRestartXray {
+				_ = m.coreMgr.RestartXray()
+			}
+			if needRestartSingBox {
+				_ = m.coreMgr.RestartSingBox()
+			}
+		}
+	}
 
 	for _, protoName := range m.config.Protocols {
 		p, ok := m.registry.Get(protoName)
@@ -2214,6 +2774,39 @@ func (m *InstallMenu) migrateInboundPorts() {
 			Inbounds []json.RawMessage `json:"inbounds"`
 		}
 		if err := json.Unmarshal(data, &wrapper); err != nil || len(wrapper.Inbounds) == 0 {
+			continue
+		}
+
+		if protoName == "vless_reality_vision" && len(m.config.Reality.Targets) > 0 {
+			migrateCfg, cloneErr := cloneConfig(m.config)
+			if cloneErr != nil {
+				rollbackMigration(fmt.Errorf("创建 %s 端口迁移配置副本失败: %w", protoName, cloneErr))
+				return
+			}
+			newDoc, didChange, newPort, err := migrateRealityVisionTargetPoolDocument(data, migrateCfg, expectedPort, protoName)
+			if err != nil {
+				rollbackMigration(fmt.Errorf("迁移 Reality Vision 目标池端口失败: %w", err))
+				return
+			}
+			configChanged := !reflect.DeepEqual(m.config.Reality, migrateCfg.Reality) || !reflect.DeepEqual(m.config.ProtocolPorts, migrateCfg.ProtocolPorts)
+			if !didChange && !configChanged {
+				continue
+			}
+			if didChange {
+				snapshotMigrationFile(fileBackups, confPath, data)
+				if err := security.AtomicWriteJSON(confPath, newDoc, 0644); err != nil {
+					rollbackMigration(fmt.Errorf("迁移 %s 端口失败: %w", protoName, err))
+					return
+				}
+				PrintInfo(fmt.Sprintf("已自动修正 %s 目标池端口，基准端口更新为 %d", protoName, newPort))
+				needRestartXray = true
+			}
+			if configChanged {
+				m.config.Reality = migrateCfg.Reality
+				m.config.ProtocolPorts = migrateCfg.ProtocolPorts
+				PrintInfo(fmt.Sprintf("已同步 %s 目标池端口配置，基准端口为 %d", protoName, newPort))
+			}
+			changed = true
 			continue
 		}
 
@@ -2260,12 +2853,14 @@ func (m *InstallMenu) migrateInboundPorts() {
 		if err != nil {
 			continue
 		}
+		wrapper.Inbounds[0] = newInbound
 		newWrapper := map[string]interface{}{
-			"inbounds": []json.RawMessage{newInbound},
+			"inbounds": wrapper.Inbounds,
 		}
+		snapshotMigrationFile(fileBackups, confPath, data)
 		if err := security.AtomicWriteJSON(confPath, newWrapper, 0644); err != nil {
-			m.logger.WithError(err).Warnf("迁移 %s 端口失败", protoName)
-			continue
+			rollbackMigration(fmt.Errorf("迁移 %s 端口失败: %w", protoName, err))
+			return
 		}
 
 		newPort, _ := jsonNumberToInt(inbound[portKey])
@@ -2288,14 +2883,16 @@ func (m *InstallMenu) migrateInboundPorts() {
 
 	if changed {
 		if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
-			m.logger.WithError(err).Warn("保存迁移后的配置失败")
+			rollbackMigration(fmt.Errorf("保存迁移后的配置失败: %w", err))
+			return
 		}
 
 		// 重启受影响的核心
 		if needRestartXray {
 			PrintInfo("正在重启 Xray（端口已修正）...")
 			if err := m.coreMgr.RestartXray(); err != nil {
-				PrintWarning(fmt.Sprintf("重启 Xray 失败: %v", err))
+				rollbackMigration(fmt.Errorf("重启 Xray 失败: %w", err))
+				return
 			} else {
 				time.Sleep(2 * time.Second)
 				status := m.coreMgr.GetStatus()
@@ -2308,11 +2905,9 @@ func (m *InstallMenu) migrateInboundPorts() {
 		}
 		if needRestartSingBox {
 			PrintInfo("正在重启 sing-box（端口已修正）...")
-			if err := m.coreMgr.MergeSingBoxConfig(); err != nil {
-				m.logger.WithError(err).Warn("合并 sing-box 配置失败")
-			}
 			if err := m.coreMgr.RestartSingBox(); err != nil {
-				PrintWarning(fmt.Sprintf("重启 sing-box 失败: %v", err))
+				rollbackMigration(fmt.Errorf("重启 sing-box 失败: %w", err))
+				return
 			} else {
 				time.Sleep(2 * time.Second)
 				status := m.coreMgr.GetStatus()
@@ -2324,4 +2919,67 @@ func (m *InstallMenu) migrateInboundPorts() {
 			}
 		}
 	}
+}
+
+func snapshotMigrationFile(backups map[string][]byte, path string, data []byte) {
+	if _, ok := backups[path]; ok {
+		return
+	}
+	backups[path] = append([]byte(nil), data...)
+}
+
+func restoreMigrationFileBackups(backups map[string][]byte) error {
+	var errs []error
+	for path, data := range backups {
+		if err := security.AtomicWrite(path, data, 0644); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func migrateRealityVisionTargetPoolDocument(data []byte, cfg *config.Config, expectedPort int, protoName string) (map[string]interface{}, bool, int, error) {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, false, 0, err
+	}
+	inbounds, ok := doc["inbounds"].([]interface{})
+	if !ok || len(inbounds) == 0 {
+		return doc, false, 0, nil
+	}
+
+	rebaseRealityTargetPorts(cfg, expectedPort)
+	targetInbounds, err := buildRealityTargetPoolInbounds(inbounds[0], cfg, expectedPort, protoName)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if len(targetInbounds) == 0 {
+		return doc, false, 0, nil
+	}
+	if reflect.DeepEqual(inbounds, targetInbounds) {
+		return doc, false, expectedPort, nil
+	}
+
+	doc["inbounds"] = targetInbounds
+	newPort := expectedPort
+	if first, ok := targetInbounds[0].(map[string]interface{}); ok {
+		if port, ok := jsonNumberToInt(first["port"]); ok {
+			newPort = port
+		}
+	}
+	return doc, true, newPort, nil
+}
+
+func rebaseRealityTargetPorts(cfg *config.Config, basePort int) {
+	if cfg == nil || basePort <= 0 || len(cfg.Reality.Targets) == 0 {
+		return
+	}
+	for i := range cfg.Reality.Targets {
+		cfg.Reality.Targets[i].Port = basePort + i
+	}
+	cfg.Reality.Port = basePort
+	if cfg.ProtocolPorts == nil {
+		cfg.ProtocolPorts = make(map[string]int)
+	}
+	cfg.ProtocolPorts["vless_reality_vision"] = basePort
 }

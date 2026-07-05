@@ -120,6 +120,10 @@ func (m *Manager) loadLocalUsers() error {
 // saveLocalUsers 将本地用户持久化到文件
 func (m *Manager) saveLocalUsers() error {
 	table := m.users.Load().(*UserTable)
+	return m.saveLocalUsersTable(table)
+}
+
+func (m *Manager) saveLocalUsersTable(table *UserTable) error {
 	var users []localUserJSON
 	for _, e := range table.entries {
 		if e.ID < 0 { // 只保存本地用户（ID 为负数）
@@ -182,10 +186,10 @@ func (m *Manager) AddLocalUser(uuid, email string) error {
 		return fmt.Errorf("UUID 已存在: %s", uuid)
 	}
 
-	// 复制旧表并添加新用户
-	m.localSeq--
+	// 复制旧表并添加新用户。先持久化候选表，成功后再切换内存状态。
+	newID := m.localSeq - 1
 	entry := &UserEntry{
-		ID:    m.localSeq,
+		ID:    newID,
 		UUID:  uuid,
 		Email: email,
 	}
@@ -207,10 +211,12 @@ func (m *Manager) AddLocalUser(uuid, email string) error {
 	table.byUUID[entry.UUID] = entry
 	table.entries = append(table.entries, entry)
 
+	if err := m.saveLocalUsersTable(table); err != nil {
+		return err
+	}
+	m.localSeq = newID
 	m.users.Store(table)
-
-	// 持久化到文件
-	return m.saveLocalUsers()
+	return nil
 }
 
 // UpdateLocalUser 更新本地用户的速率/设备限制（独立模式）
@@ -256,8 +262,11 @@ func (m *Manager) UpdateLocalUser(uuid string, speedLimit, deviceLimit int) erro
 		}
 	}
 
+	if err := m.saveLocalUsersTable(table); err != nil {
+		return err
+	}
 	m.users.Store(table)
-	return m.saveLocalUsers()
+	return nil
 }
 
 // RemoveLocalUser 删除本地用户（独立模式）
@@ -290,10 +299,11 @@ func (m *Manager) RemoveLocalUser(uuid string) error {
 		}
 	}
 
+	if err := m.saveLocalUsersTable(table); err != nil {
+		return err
+	}
 	m.users.Store(table)
-
-	// 持久化到文件
-	return m.saveLocalUsers()
+	return nil
 }
 
 // GetUser 根据 ID 获取用户

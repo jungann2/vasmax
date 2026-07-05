@@ -90,6 +90,12 @@ paths:
 	if cfg.Subscription.TestURL != "https://www.gstatic.com/generate_204" {
 		t.Errorf("expected default subscription test_url, got %s", cfg.Subscription.TestURL)
 	}
+	if cfg.ServerDNS.Mode != "system" {
+		t.Errorf("expected default server_dns mode system, got %s", cfg.ServerDNS.Mode)
+	}
+	if cfg.ServerDNS.Strategy != "ipv4_only" {
+		t.Errorf("expected default server_dns strategy ipv4_only, got %s", cfg.ServerDNS.Strategy)
+	}
 	if cfg.Nginx.LongConnectionTimeout != "86400s" {
 		t.Errorf("expected default nginx long_connection_timeout, got %s", cfg.Nginx.LongConnectionTimeout)
 	}
@@ -328,6 +334,12 @@ func TestSetDefaults_AllPaths(t *testing.T) {
 	if cfg.Subscription.TestURL != "https://www.gstatic.com/generate_204" {
 		t.Errorf("unexpected subscription test_url default: %s", cfg.Subscription.TestURL)
 	}
+	if cfg.ServerDNS.Mode != "system" {
+		t.Errorf("unexpected server_dns mode default: %s", cfg.ServerDNS.Mode)
+	}
+	if cfg.ServerDNS.Strategy != "ipv4_only" {
+		t.Errorf("unexpected server_dns strategy default: %s", cfg.ServerDNS.Strategy)
+	}
 	if cfg.Nginx.LongConnectionTimeout != "86400s" {
 		t.Errorf("unexpected nginx long_connection_timeout default: %s", cfg.Nginx.LongConnectionTimeout)
 	}
@@ -387,6 +399,49 @@ func TestValidate_SubscriptionDNSMode(t *testing.T) {
 	cfg.Subscription.TestURL = "http://example.com/generate_204"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected non-https test_url to fail")
+	}
+
+	cfg.Subscription.TestURL = "https://www.gstatic.com/generate_204"
+	cfg.Subscription.ServerIP = "not-an-ip"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid subscription.server_ip to fail")
+	}
+
+	cfg.Subscription.ServerIP = "203.0.113.10"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid subscription.server_ip to pass: %v", err)
+	}
+}
+
+func TestValidate_ServerDNS(t *testing.T) {
+	cfg := &Config{
+		Standalone: true,
+		Log:        LogConfig{Level: "info"},
+		ServerDNS:  ServerDNSConfig{Mode: "bad-mode", Strategy: "ipv4_only"},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid server_dns.mode to fail")
+	}
+
+	cfg.ServerDNS.Mode = ServerDNSModeCustom
+	cfg.ServerDNS.Servers = []string{"https://dns.example/dns-query"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected custom server_dns without plain IP to fail")
+	}
+
+	cfg.ServerDNS.Servers = []string{"1.1.1.1", "1.1.1.1", "9.9.9.9"}
+	cfg.ServerDNS.Strategy = "bad-strategy"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid server_dns.strategy to fail")
+	}
+
+	cfg.ServerDNS.Strategy = "ipv4_only"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid server_dns custom config, got %v", err)
+	}
+	servers := cfg.ServerDNS.EffectiveServers()
+	if len(servers) != 2 || servers[0] != "1.1.1.1" || servers[1] != "9.9.9.9" {
+		t.Fatalf("expected deduplicated custom server dns, got %#v", servers)
 	}
 }
 

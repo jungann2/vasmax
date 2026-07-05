@@ -34,28 +34,46 @@ func NewManager(logger *logrus.Logger) *Manager {
 // Priority: ufw > firewalld > iptables. Returns nil if none found.
 func Detect(logger *logrus.Logger) FirewallBackend {
 	if b := newUFW(); b.IsActive() {
-		logger.Info("detected firewall: ufw")
+		if logger != nil {
+			logger.Info("detected firewall: ufw")
+		}
 		return b
 	}
 	if b := newFirewalld(); b.IsActive() {
-		logger.Info("detected firewall: firewalld")
+		if logger != nil {
+			logger.Info("detected firewall: firewalld")
+		}
 		return b
 	}
 	if b := newIptables(); b.IsActive() {
-		logger.Info("detected firewall: iptables")
+		if logger != nil {
+			logger.Info("detected firewall: iptables")
+		}
 		return b
 	}
-	logger.Warn("no active firewall detected, firewall operations will be skipped")
+	if logger != nil {
+		logger.Warn("no active firewall detected, firewall operations will be skipped")
+	}
 	return nil
 }
 
 // Backend returns the detected firewall backend (may be nil).
-func (m *Manager) Backend() FirewallBackend { return m.backend }
+func (m *Manager) Backend() FirewallBackend {
+	if m == nil {
+		return nil
+	}
+	return m.backend
+}
 
 // AddPort adds a port rule. Skips if no backend detected.
 func (m *Manager) AddPort(port int, protocol string) error {
+	if m == nil {
+		return nil
+	}
 	if m.backend == nil {
-		m.logger.Warn("no firewall backend, skipping AddPort")
+		if m.logger != nil {
+			m.logger.Warn("no firewall backend, skipping AddPort")
+		}
 		return nil
 	}
 	return m.backend.AddPort(port, protocol)
@@ -63,6 +81,9 @@ func (m *Manager) AddPort(port int, protocol string) error {
 
 // RemovePort removes a port rule.
 func (m *Manager) RemovePort(port int, protocol string) error {
+	if m == nil {
+		return nil
+	}
 	if m.backend == nil {
 		return nil
 	}
@@ -71,6 +92,9 @@ func (m *Manager) RemovePort(port int, protocol string) error {
 
 // AddPortRange adds a port range rule.
 func (m *Manager) AddPortRange(start, end int, protocol string) error {
+	if m == nil {
+		return nil
+	}
 	if m.backend == nil {
 		return nil
 	}
@@ -79,6 +103,9 @@ func (m *Manager) AddPortRange(start, end int, protocol string) error {
 
 // RemovePortRange removes a port range rule.
 func (m *Manager) RemovePortRange(start, end int, protocol string) error {
+	if m == nil {
+		return nil
+	}
 	if m.backend == nil {
 		return nil
 	}

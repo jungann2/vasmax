@@ -1,6 +1,7 @@
 package menu
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/sirupsen/logrus"
@@ -96,27 +97,21 @@ func (m *PortMenu) openPort() {
 	PrintSuccess("  直接回车跳过")
 	note := ReadInput("备注")
 
-	// 开放防火墙
-	var fwErr error
-	if proto == "both" {
-		fwErr = m.firewallMgr.AddPort(port, "tcp")
-		if fwErr == nil {
-			fwErr = m.firewallMgr.AddPort(port, "udp")
-		}
-	} else {
-		fwErr = m.firewallMgr.AddPort(port, proto)
-	}
-	if fwErr != nil {
-		PrintWarning(fmt.Sprintf("防火墙规则添加失败（可能无防火墙）: %v", fwErr))
+	if err := m.addFirewallPortRules(port, proto); err != nil {
+		PrintError(fmt.Sprintf("防火墙规则添加失败，端口未保存到配置: %v", err))
+		return
 	}
 
 	// 保存到配置
+	oldPorts := append([]config.ExtraPort(nil), m.config.ExtraPorts...)
 	m.config.ExtraPorts = append(m.config.ExtraPorts, config.ExtraPort{
 		Port:     port,
 		Protocol: proto,
 		Note:     note,
 	})
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.ExtraPorts = oldPorts
+		_ = m.removeFirewallPortRules(port, proto)
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}
@@ -151,17 +146,17 @@ func (m *PortMenu) closePort() {
 		return
 	}
 
-	// 移除防火墙规则
-	if p.Protocol == "both" {
-		m.firewallMgr.RemovePort(p.Port, "tcp")
-		m.firewallMgr.RemovePort(p.Port, "udp")
-	} else {
-		m.firewallMgr.RemovePort(p.Port, p.Protocol)
+	if err := m.removeFirewallPortRules(p.Port, p.Protocol); err != nil {
+		PrintError(fmt.Sprintf("防火墙规则移除失败，配置未修改: %v", err))
+		return
 	}
 
 	// 从配置移除
+	oldPorts := append([]config.ExtraPort(nil), m.config.ExtraPorts...)
 	m.config.ExtraPorts = append(m.config.ExtraPorts[:idx-1], m.config.ExtraPorts[idx:]...)
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.ExtraPorts = oldPorts
+		_ = m.addFirewallPortRules(p.Port, p.Protocol)
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}
@@ -171,10 +166,39 @@ func (m *PortMenu) closePort() {
 
 func (m *PortMenu) showFirewallStatus() {
 	PrintTitle("防火墙状态")
-	if m.firewallMgr.Backend() == nil {
+	if m.firewallMgr == nil || m.firewallMgr.Backend() == nil {
 		PrintWarning("未检测到防火墙（ufw / firewalld / iptables）")
 		return
 	}
 	PrintSuccess("防火墙已激活")
 	PrintInfo(fmt.Sprintf("已管理 %d 个额外端口", len(m.config.ExtraPorts)))
+}
+
+func (m *PortMenu) addFirewallPortRules(port int, proto string) error {
+	if m.firewallMgr == nil {
+		return nil
+	}
+	if proto != "both" {
+		return m.firewallMgr.AddPort(port, proto)
+	}
+	if err := m.firewallMgr.AddPort(port, "tcp"); err != nil {
+		return err
+	}
+	if err := m.firewallMgr.AddPort(port, "udp"); err != nil {
+		_ = m.firewallMgr.RemovePort(port, "tcp")
+		return err
+	}
+	return nil
+}
+
+func (m *PortMenu) removeFirewallPortRules(port int, proto string) error {
+	if m.firewallMgr == nil {
+		return nil
+	}
+	if proto != "both" {
+		return m.firewallMgr.RemovePort(port, proto)
+	}
+	tcpErr := m.firewallMgr.RemovePort(port, "tcp")
+	udpErr := m.firewallMgr.RemovePort(port, "udp")
+	return errors.Join(tcpErr, udpErr)
 }

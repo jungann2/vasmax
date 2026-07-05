@@ -27,18 +27,20 @@ func (a *AnyTLS) GenerateInbound(params *InboundParams) (json.RawMessage, error)
 			"password": u.UUID,
 		})
 	}
+	tls := map[string]interface{}{
+		"enabled":          true,
+		"server_name":      params.Domain,
+		"certificate_path": params.CertFile,
+		"key_path":         params.KeyFile,
+		"alpn":             inboundALPN(params, defaultTLSALPN),
+	}
 	inbound := map[string]interface{}{
 		"type":        "anytls",
 		"tag":         params.Tag,
 		"listen":      "::",
 		"listen_port": params.Port,
 		"users":       users,
-		"tls": map[string]interface{}{
-			"enabled":          true,
-			"server_name":      params.Domain,
-			"certificate_path": params.CertFile,
-			"key_path":         params.KeyFile,
-		},
+		"tls":         tls,
 	}
 	if len(params.PaddingScheme) > 0 {
 		inbound["padding_scheme"] = params.PaddingScheme
@@ -80,7 +82,7 @@ func (a *AnyTLS) GenerateClashProxy(user *api.User, info *ServerInfo) map[string
 		"sni":                info.Domain,
 		"client-fingerprint": "chrome",
 		"udp":                true,
-		"alpn":               []string{"h2", "http/1.1"},
+		"alpn":               serverInfoALPN(info, defaultTLSALPN),
 	}
 	markClashSkipCertVerify(proxy, info)
 	return proxy
@@ -96,6 +98,7 @@ func (a *AnyTLS) GenerateSingBoxOutbound(user *api.User, info *ServerInfo) map[s
 		"tls": map[string]interface{}{
 			"enabled":     true,
 			"server_name": info.Domain,
+			"alpn":        serverInfoALPN(info, defaultTLSALPN),
 		},
 	}
 	markSingBoxTLSInsecure(outbound, info)

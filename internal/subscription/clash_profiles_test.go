@@ -2,30 +2,36 @@ package subscription
 
 import "testing"
 
-func TestClashRulesIncludeCommonAIServiceDomains(t *testing.T) {
-	rules := buildClashRules()
-	expected := []string{
-		"DOMAIN-SUFFIX,openai.com,OpenAI",
-		"DOMAIN-SUFFIX,chatgpt.com,OpenAI",
-		"DOMAIN-SUFFIX,oaistatic.com,OpenAI",
-		"DOMAIN-SUFFIX,oaiusercontent.com,OpenAI",
-		"DOMAIN-SUFFIX,anthropic.com,OpenAI",
-		"DOMAIN-SUFFIX,claude.ai,OpenAI",
-		"DOMAIN-SUFFIX,claude.com,OpenAI",
+func TestBuildClashProxyGroupsAddsRealityFallback(t *testing.T) {
+	groups := buildClashProxyGroups([]string{
+		"node-anytls",
+		"node-reality-apple",
+		"node-reality-bing",
+	}, "https://www.gstatic.com/generate_204")
+
+	reality := findGroup(groups, "Reality智能")
+	if reality == nil {
+		t.Fatal("Reality智能 group was not generated")
+	}
+	if reality["type"] != "fallback" {
+		t.Fatalf("Reality智能 type = %v, want fallback", reality["type"])
 	}
 
-	for _, want := range expected {
-		if !containsRule(rules, want) {
-			t.Fatalf("missing AI service rule %q in %#v", want, rules)
-		}
+	manual := findGroup(groups, "手动切换")
+	if manual == nil {
+		t.Fatal("手动切换 group was not generated")
+	}
+	proxies, ok := manual["proxies"].([]string)
+	if !ok || len(proxies) == 0 || proxies[0] != "Reality智能" {
+		t.Fatalf("manual proxies should start with Reality智能: %#v", manual["proxies"])
 	}
 }
 
-func containsRule(rules []string, want string) bool {
-	for _, rule := range rules {
-		if rule == want {
-			return true
+func findGroup(groups []map[string]interface{}, name string) map[string]interface{} {
+	for _, group := range groups {
+		if group["name"] == name {
+			return group
 		}
 	}
-	return false
+	return nil
 }

@@ -1,6 +1,9 @@
 package firewall
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // PortHopConfig holds port hopping configuration.
 type PortHopConfig struct {
@@ -18,9 +21,14 @@ func DefaultPortHopRange() (int, int) {
 // SetupPortHopping configures port hopping using the firewall manager.
 // It opens the port range and sets up NAT forwarding to the target port.
 func (m *Manager) SetupPortHopping(cfg *PortHopConfig) error {
+	if m == nil {
+		return fmt.Errorf("firewall manager is nil")
+	}
 	if m.backend == nil {
-		m.logger.Warn("no firewall backend, skipping port hopping setup")
-		return nil
+		if m.logger != nil {
+			m.logger.Warn("no firewall backend, cannot setup port hopping")
+		}
+		return fmt.Errorf("no active firewall backend; port hopping requires local NAT/port-forward support")
 	}
 
 	if cfg.StartPort < 1 || cfg.EndPort > 65535 || cfg.StartPort >= cfg.EndPort {
@@ -40,16 +48,22 @@ func (m *Manager) SetupPortHopping(cfg *PortHopConfig) error {
 
 	// Set up NAT forwarding from range to target port.
 	if err := m.backend.AddPortForward(cfg.StartPort, cfg.EndPort, cfg.TargetPort, cfg.Protocol); err != nil {
+		_ = m.backend.RemovePortRange(cfg.StartPort, cfg.EndPort, cfg.Protocol)
 		return fmt.Errorf("failed to setup port forwarding: %w", err)
 	}
 
-	m.logger.Infof("port hopping configured: %d-%d/%s -> %d",
-		cfg.StartPort, cfg.EndPort, cfg.Protocol, cfg.TargetPort)
+	if m.logger != nil {
+		m.logger.Infof("port hopping configured: %d-%d/%s -> %d",
+			cfg.StartPort, cfg.EndPort, cfg.Protocol, cfg.TargetPort)
+	}
 	return nil
 }
 
 // RemovePortHopping removes port hopping configuration.
 func (m *Manager) RemovePortHopping(cfg *PortHopConfig) error {
+	if m == nil {
+		return nil
+	}
 	if m.backend == nil {
 		return nil
 	}
@@ -59,9 +73,14 @@ func (m *Manager) RemovePortHopping(cfg *PortHopConfig) error {
 	}
 
 	// Remove forwarding first, then close the port range.
-	_ = m.backend.RemovePortForward(cfg.StartPort, cfg.EndPort, cfg.TargetPort, cfg.Protocol)
-	_ = m.backend.RemovePortRange(cfg.StartPort, cfg.EndPort, cfg.Protocol)
+	forwardErr := m.backend.RemovePortForward(cfg.StartPort, cfg.EndPort, cfg.TargetPort, cfg.Protocol)
+	rangeErr := m.backend.RemovePortRange(cfg.StartPort, cfg.EndPort, cfg.Protocol)
+	if err := errors.Join(forwardErr, rangeErr); err != nil {
+		return err
+	}
 
-	m.logger.Infof("port hopping removed: %d-%d/%s", cfg.StartPort, cfg.EndPort, cfg.Protocol)
+	if m.logger != nil {
+		m.logger.Infof("port hopping removed: %d-%d/%s", cfg.StartPort, cfg.EndPort, cfg.Protocol)
+	}
 	return nil
 }

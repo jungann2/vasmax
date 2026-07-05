@@ -107,7 +107,9 @@ func (m *Manager) DeployFakeSite(templateURL string) error {
 	// Clean up backup on success.
 	_ = os.RemoveAll(backupDir)
 
-	m.logger.Infof("fake site deployed from %s", templateURL)
+	if m.logger != nil {
+		m.logger.Infof("fake site deployed from %s", templateURL)
+	}
 	return nil
 }
 

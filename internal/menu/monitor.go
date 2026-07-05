@@ -55,6 +55,14 @@ const statsAPIAddr = "127.0.0.1:10085"
 
 // ensureStatsAPI 确保 Stats API 配置存在并重启 Xray
 func (m *MonitorMenu) ensureStatsAPI() bool {
+	if !m.hasXrayProtocol() {
+		PrintWarning("当前未安装 Xray 协议，Xray Stats API 用户流量统计不可用；sing-box 协议请查看当前活跃连接或系统日志")
+		return false
+	}
+	if !fileExists(xrayBinary) {
+		PrintWarning(fmt.Sprintf("未找到 Xray 二进制: %s", xrayBinary))
+		return false
+	}
 	confDir := m.config.Paths.XrayConf
 	apiFile := filepath.Join(confDir, "01_api.json")
 	statsFile := filepath.Join(confDir, "06_stats.json")
@@ -84,6 +92,19 @@ func (m *MonitorMenu) ensureStatsAPI() bool {
 		PrintSuccess("Stats API 已启用")
 	}
 	return true
+}
+
+func (m *MonitorMenu) hasXrayProtocol() bool {
+	if m == nil || m.config == nil {
+		return false
+	}
+	reg := protocol.DefaultRegistry()
+	for _, protoName := range m.config.Protocols {
+		if p, ok := reg.Get(protoName); ok && p.CoreType() == "xray" {
+			return true
+		}
+	}
+	return false
 }
 
 // statEntry Xray Stats API 返回的统计条目
@@ -266,7 +287,8 @@ func (m *MonitorMenu) showActiveConnections() {
 	sourceCount := make(map[string]int)
 
 	for _, line := range lines {
-		if !strings.Contains(line, "xray") {
+		process := proxyProcessFromSSLine(line)
+		if process == "" {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -282,8 +304,8 @@ func (m *MonitorMenu) showActiveConnections() {
 			srcIP = remote[:idx]
 		}
 
-		conns = append(conns, connInfo{Source: remote, Dest: local, State: state})
-		sourceCount[srcIP]++
+		conns = append(conns, connInfo{Source: remote, Dest: fmt.Sprintf("%s %s", process, local), State: state})
+		sourceCount[fmt.Sprintf("%s %s", process, srcIP)]++
 	}
 
 	if len(conns) == 0 {
@@ -318,6 +340,17 @@ func (m *MonitorMenu) showActiveConnections() {
 	}
 
 	fmt.Println()
+}
+
+func proxyProcessFromSSLine(line string) string {
+	switch {
+	case strings.Contains(line, `"xray"`) || strings.Contains(line, "xray"):
+		return "xray"
+	case strings.Contains(line, `"sing-box"`) || strings.Contains(line, "sing-box"):
+		return "sing-box"
+	default:
+		return ""
+	}
 }
 
 // liveMonitor 实时连接监控

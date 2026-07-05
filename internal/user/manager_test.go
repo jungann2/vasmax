@@ -2,6 +2,8 @@ package user
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -118,6 +120,73 @@ func TestRemoveLocalUser(t *testing.T) {
 	if err == nil {
 		t.Error("删除不存在的用户应返回错误")
 	}
+}
+
+func TestLocalUserAddFailureDoesNotMutateMemory(t *testing.T) {
+	m := newTestManager(blockedLocalUserFile(t))
+
+	err := m.AddLocalUser("550e8400-e29b-41d4-a716-446655440001", "alice@test.com")
+	if err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if m.Count() != 0 {
+		t.Fatalf("expected memory state unchanged, got %d users", m.Count())
+	}
+}
+
+func TestLocalUserUpdateFailureDoesNotMutateMemory(t *testing.T) {
+	m := newTestManager(filepath.Join(t.TempDir(), "local_users.json"))
+	uuid := "550e8400-e29b-41d4-a716-446655440001"
+	if err := m.AddLocalUser(uuid, "alice@test.com"); err != nil {
+		t.Fatal(err)
+	}
+	m.localFile = blockedLocalUserFile(t)
+
+	err := m.UpdateLocalUser(uuid, 100, 2)
+	if err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	got := m.GetUserByUUID(uuid)
+	if got == nil || got.SpeedLimit != 0 || got.DeviceLimit != 0 {
+		t.Fatalf("expected memory state unchanged, got %#v", got)
+	}
+}
+
+func TestLocalUserRemoveFailureDoesNotMutateMemory(t *testing.T) {
+	m := newTestManager(filepath.Join(t.TempDir(), "local_users.json"))
+	uuid := "550e8400-e29b-41d4-a716-446655440001"
+	if err := m.AddLocalUser(uuid, "alice@test.com"); err != nil {
+		t.Fatal(err)
+	}
+	m.localFile = blockedLocalUserFile(t)
+
+	err := m.RemoveLocalUser(uuid)
+	if err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if got := m.GetUserByUUID(uuid); got == nil {
+		t.Fatal("expected user to remain in memory after failed remove")
+	}
+}
+
+func blockedLocalUserFile(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(blocker, "local_users.json")
+}
+
+func newTestManager(localFile string) *Manager {
+	m := &Manager{localFile: localFile}
+	m.users.Store(&UserTable{
+		byID:    make(map[int]*UserEntry),
+		byUUID:  make(map[string]*UserEntry),
+		entries: make([]*UserEntry, 0),
+	})
+	return m
 }
 
 func TestConcurrentAccess(t *testing.T) {

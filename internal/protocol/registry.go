@@ -48,11 +48,13 @@ type InboundParams struct {
 	PaddingScheme []string // AnyTLS padding scheme
 	TLSMinVersion string   // "1.0"/"1.1"/"1.2"/"1.3"，空值默认 "1.2"
 	TLSMaxVersion string   // "1.2"/"1.3"，空值默认 "1.3"
+	ALPN          []string // TLS ALPN list；空值使用协议默认
 	KeepAlive     config.ConnectionConfig
 }
 
 // ServerInfo 服务器连接信息（用于生成订阅链接）
 type ServerInfo struct {
+	Name        string
 	Host        string
 	CDNHost     string // CDN 地址（如配置）
 	Port        int
@@ -61,6 +63,7 @@ type ServerInfo struct {
 	ServiceName string
 	Reality     *config.RealityConfig
 	Tuic        *config.TuicConfig
+	ALPN        []string
 }
 
 // Registry 协议注册表
@@ -117,9 +120,10 @@ func (r *Registry) ListAll() []Protocol {
 
 // domainOrder 绑定域名安装的固定排序（推荐 → 稳定 → 一般 → 不安全）
 var domainOrder = []string{
+	"vless_reality_vision",
 	"anytls",
-	"vless_ws_tls",
 	"vless_tcp_tls_vision",
+	"vless_ws_tls",
 	"hysteria2",
 	"tuic",
 	"vless_grpc_tls",
@@ -128,7 +132,6 @@ var domainOrder = []string{
 	"trojan_tcp_tls",
 	"trojan_grpc_tls",
 	"naive",
-	"vless_reality_vision",
 	"vless_reality_grpc",
 	"vless_reality_xhttp",
 	"socks5",

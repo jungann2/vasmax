@@ -284,6 +284,9 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		}
 
 		domain := l.config.GetProtocolDomain(protoName)
+		if domain == "" {
+			domain = l.config.TLS.Domain
+		}
 		certFile := l.config.TLS.CertFile
 		keyFile := l.config.TLS.KeyFile
 		if domain != "" {
@@ -315,6 +318,7 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 			ServiceName:   protocol.DefaultGRPCServiceName(p),
 			TLSMinVersion: l.config.TLS.MinVersion,
 			TLSMaxVersion: l.config.TLS.MaxVersion,
+			ALPN:          l.config.ALPN.ALPNList(),
 			KeepAlive:     l.config.Connection,
 		}
 		if l.nodeConfig != nil && p.Name() == "anytls" {
@@ -323,14 +327,14 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 		if l.config.Reality.PrivateKey != "" && isRealityProtocol(protoName) {
 			params.Reality = &l.config.Reality
 		}
-		if l.config.Hysteria2.Port > 0 {
+		if protoName == "hysteria2" {
 			params.Hysteria2 = &l.config.Hysteria2
 		}
-		if l.config.Tuic.Port > 0 {
+		if protoName == "tuic" {
 			params.Tuic = &l.config.Tuic
 		}
 
-		inboundJSON, err := p.GenerateInbound(params)
+		inboundJSONs, err := protocol.GenerateInboundMessages(p, params)
 		if err != nil {
 			l.logger.WithError(err).Errorf("生成 %s 入站配置失败", protoName)
 			errs = append(errs, fmt.Errorf("%s: generate inbound: %w", protoName, err))
@@ -339,7 +343,7 @@ func (l *Loop) regenerateConfigs(users []api.User) error {
 
 		// 包装为 inbounds 数组格式
 		wrapper := map[string]interface{}{
-			"inbounds": []json.RawMessage{inboundJSON},
+			"inbounds": inboundJSONs,
 		}
 
 		var confDir string
@@ -608,8 +612,16 @@ func (l *Loop) reloadCores() error {
 
 	var errs []error
 
+	if err := l.coreManager.EnsureRuntimeBaseConfigs(); err != nil {
+		l.logger.WithError(err).Warn("基础运行配置生成失败，跳过核心重载")
+		return fmt.Errorf("ensure runtime base configs: %w", err)
+	}
+
 	if hasXray {
-		if err := l.coreManager.ReloadXray(); err != nil {
+		if err := l.coreManager.TestXrayConfig(); err != nil {
+			l.logger.WithError(err).Warn("Xray 配置预检失败，跳过重载")
+			errs = append(errs, fmt.Errorf("xray config test: %w", err))
+		} else if err := l.coreManager.ReloadXray(); err != nil {
 			l.logger.WithError(err).Warn("Xray 热重载失败")
 			if restartErr := l.coreManager.RestartXray(); restartErr != nil {
 				l.logger.WithError(restartErr).Warn("Xray 重启失败")
@@ -623,11 +635,7 @@ func (l *Loop) reloadCores() error {
 	}
 
 	if hasSingbox {
-		// sing-box 不支持多文件配置，需先合并为单一 config.json
-		if err := l.coreManager.MergeSingBoxConfig(); err != nil {
-			l.logger.WithError(err).Warn("sing-box 配置合并失败，跳过重启")
-			errs = append(errs, fmt.Errorf("sing-box merge config: %w", err))
-		} else if err := l.coreManager.RestartSingBox(); err != nil {
+		if err := l.coreManager.RestartSingBox(); err != nil {
 			l.logger.WithError(err).Warn("sing-box 重启失败")
 			errs = append(errs, fmt.Errorf("sing-box restart: %w", err))
 		} else {

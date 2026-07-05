@@ -18,15 +18,51 @@ type CCMode struct {
 	Label string // 显示名称
 }
 
+// AutoEnableResult describes the outcome of automatic BBR+FQ enablement.
+type AutoEnableResult struct {
+	Applied       bool
+	AlreadyActive bool
+	Supported     bool
+	Message       string
+}
+
+// RuntimeStatus describes both sysctl defaults and the current default device qdisc.
+type RuntimeStatus struct {
+	CC                 string
+	DefaultQdisc       string
+	DefaultInterface   string
+	DeviceQdisc        string
+	DeviceQdiscError   string
+	RecommendedSysctl  bool
+	RecommendedRuntime bool
+}
+
 // 预定义的加速模式
 var CCModes = []CCMode{
 	{Qdisc: "fq", CC: "bbr", Label: "BBR + FQ（推荐*）"},
-	{Qdisc: "fq_pie", CC: "bbr", Label: "BBR + FQ_PIE（推荐）"},
-	{Qdisc: "cake", CC: "bbr", Label: "BBR + CAKE"},
-	{Qdisc: "fq", CC: "bbr2", Label: "BBR2 + FQ（推荐）"},
-	{Qdisc: "fq_pie", CC: "bbr2", Label: "BBR2 + FQ_PIE"},
-	{Qdisc: "cake", CC: "bbr2", Label: "BBR2 + CAKE"},
-	{Qdisc: "fq", CC: "bbrplus", Label: "BBRplus + FQ"},
+}
+
+// RecommendedMode returns the default conservative acceleration mode.
+func RecommendedMode() CCMode {
+	return CCModes[0]
+}
+
+// IsBBRCC reports whether cc is one of the BBR-family algorithms.
+func IsBBRCC(cc string) bool {
+	return strings.TrimSpace(cc) == "bbr"
+}
+
+// IsModeActive reports whether both congestion control and qdisc match.
+func IsModeActive(mode CCMode) bool {
+	cc := CurrentCC()
+	qdisc := CurrentQdisc()
+	if strings.TrimSpace(cc) != mode.CC {
+		return false
+	}
+	if mode.Qdisc == "" {
+		return true
+	}
+	return strings.TrimSpace(qdisc) == mode.Qdisc
 }
 
 // CurrentCC 返回当前拥塞控制算法
@@ -47,6 +83,89 @@ func CurrentQdisc() string {
 	return strings.TrimSpace(string(out))
 }
 
+// DefaultInterface returns the default outbound network interface when detectable.
+func DefaultInterface() string {
+	if out, err := exec.Command("ip", "route", "get", "1.1.1.1").Output(); err == nil {
+		if iface := interfaceFromRouteOutput(string(out)); iface != "" {
+			return iface
+		}
+	}
+	if out, err := exec.Command("ip", "route", "show", "default").Output(); err == nil {
+		if iface := interfaceFromRouteOutput(string(out)); iface != "" {
+			return iface
+		}
+	}
+	return ""
+}
+
+// CurrentDeviceQdisc returns the root qdisc for one interface.
+func CurrentDeviceQdisc(iface string) (string, error) {
+	iface = strings.TrimSpace(iface)
+	if iface == "" {
+		return "", fmt.Errorf("default interface not found")
+	}
+	out, err := exec.Command("tc", "qdisc", "show", "dev", iface).Output()
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(out))
+	for i, field := range fields {
+		if field == "qdisc" && i+1 < len(fields) {
+			return fields[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("qdisc not found for %s", iface)
+}
+
+// RecommendedRuntimeStatus reports whether BBR+FQ is active in sysctl and on the default interface.
+func RecommendedRuntimeStatus() RuntimeStatus {
+	mode := RecommendedMode()
+	status := RuntimeStatus{
+		CC:                CurrentCC(),
+		DefaultQdisc:      CurrentQdisc(),
+		DefaultInterface:  DefaultInterface(),
+		RecommendedSysctl: IsModeActive(mode),
+	}
+	qdisc, err := CurrentDeviceQdisc(status.DefaultInterface)
+	if err != nil {
+		status.DeviceQdiscError = err.Error()
+		return status
+	}
+	status.DeviceQdisc = qdisc
+	status.RecommendedRuntime = status.RecommendedSysctl && qdisc == mode.Qdisc
+	return status
+}
+
+// ApplyDeviceQdisc applies qdisc to the current default outbound interface.
+func ApplyDeviceQdisc(qdisc string) error {
+	qdisc = strings.TrimSpace(qdisc)
+	if qdisc == "" {
+		return nil
+	}
+	iface := DefaultInterface()
+	if iface == "" {
+		return fmt.Errorf("default interface not found")
+	}
+	if _, err := exec.LookPath("tc"); err != nil {
+		return fmt.Errorf("tc command not found: %w", err)
+	}
+	out, err := exec.Command("tc", "qdisc", "replace", "dev", iface, "root", qdisc).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tc qdisc replace dev %s root %s failed: %s: %w", iface, qdisc, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func interfaceFromRouteOutput(output string) string {
+	fields := strings.Fields(output)
+	for i, field := range fields {
+		if field == "dev" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
 // AvailableCC 返回当前内核支持的拥塞控制算法列表
 func AvailableCC() []string {
 	out, err := exec.Command("sysctl", "-n", "net.ipv4.tcp_available_congestion_control").Output()
@@ -54,6 +173,71 @@ func AvailableCC() []string {
 		return nil
 	}
 	return strings.Fields(strings.TrimSpace(string(out)))
+}
+
+// IsCCAvailable reports whether the current kernel supports a congestion control algorithm.
+func IsCCAvailable(cc string) bool {
+	cc = strings.TrimSpace(cc)
+	if cc == "" {
+		return false
+	}
+	_ = exec.Command("modprobe", "tcp_"+cc).Run()
+	for _, available := range AvailableCC() {
+		if available == cc {
+			return true
+		}
+	}
+	return false
+}
+
+// AutoEnableRecommended enables BBR+FQ only when the running kernel already supports BBR.
+// It never installs or switches kernels and never requires a reboot.
+func AutoEnableRecommended() (AutoEnableResult, error) {
+	mode := RecommendedMode()
+	status := RecommendedRuntimeStatus()
+	if status.RecommendedRuntime {
+		return AutoEnableResult{
+			AlreadyActive: true,
+			Supported:     true,
+			Message:       fmt.Sprintf("%s 已经启用", mode.Label),
+		}, nil
+	}
+	if !IsRoot() {
+		return AutoEnableResult{
+			Supported: false,
+			Message:   "自动启用 BBR+FQ 需要 root 权限",
+		}, fmt.Errorf("需要 root 权限")
+	}
+	if !IsCCAvailable(mode.CC) {
+		return AutoEnableResult{
+			Supported: false,
+			Message: fmt.Sprintf("当前内核不支持 %s，未自动启用；可用算法: %s",
+				mode.CC, strings.Join(AvailableCC(), ", ")),
+		}, nil
+	}
+	if err := SetCC(mode); err != nil {
+		return AutoEnableResult{Supported: true, Message: err.Error()}, err
+	}
+	status = RecommendedRuntimeStatus()
+	if !status.RecommendedRuntime {
+		detail := fmt.Sprintf("当前状态为 %s + %s", status.CC, status.DefaultQdisc)
+		if status.DeviceQdisc != "" {
+			detail += fmt.Sprintf("，网卡 qdisc=%s", status.DeviceQdisc)
+		}
+		if status.DeviceQdiscError != "" {
+			detail += fmt.Sprintf("，无法确认网卡 qdisc: %s", status.DeviceQdiscError)
+		}
+		return AutoEnableResult{
+			Applied:   true,
+			Supported: true,
+			Message:   fmt.Sprintf("已尝试启用 %s，但%s", mode.Label, detail),
+		}, fmt.Errorf("BBR+FQ 状态未确认")
+	}
+	return AutoEnableResult{
+		Applied:   true,
+		Supported: true,
+		Message:   fmt.Sprintf("%s 已自动启用，并会在重启后持续生效", mode.Label),
+	}, nil
 }
 
 // SetCC 设置拥塞控制算法和队列调度，持久化到配置文件并立即生效
@@ -94,6 +278,9 @@ func SetCC(mode CCMode) error {
 	if out, err := exec.Command("sysctl", "-p", SysctlBBRConf).CombinedOutput(); err != nil {
 		return fmt.Errorf("应用 sysctl 配置失败: %s", string(out))
 	}
+	if err := ApplyDeviceQdisc(mode.Qdisc); err != nil {
+		return fmt.Errorf("应用网卡 qdisc 失败: %w", err)
+	}
 
 	return nil
 }
@@ -122,37 +309,4 @@ func ReloadSysctl() error {
 		return fmt.Errorf("sysctl --system 失败: %s", string(out))
 	}
 	return nil
-}
-
-// EditSysctlFile 用编辑器打开 BBR sysctl 配置文件，编辑后自动重新加载
-func EditSysctlFile() error {
-	// 确保文件存在
-	if _, err := os.Stat(SysctlBBRConf); os.IsNotExist(err) {
-		if err := os.WriteFile(SysctlBBRConf, []byte("# vasmax BBR 配置\n"), 0644); err != nil {
-			return err
-		}
-	}
-
-	// 按优先级查找可用编辑器
-	editor := ""
-	for _, e := range []string{"nano", "vi", "vim"} {
-		if _, err := exec.LookPath(e); err == nil {
-			editor = e
-			break
-		}
-	}
-	if editor == "" {
-		return fmt.Errorf("未找到可用的文本编辑器（需要 nano、vi 或 vim）")
-	}
-
-	cmd := exec.Command(editor, SysctlBBRConf)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-
-	// 编辑完成后自动重新加载使修改立即生效
-	return ReloadSysctl()
 }

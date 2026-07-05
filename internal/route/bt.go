@@ -2,6 +2,7 @@ package route
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,8 +24,19 @@ func (b *BTManager) Block() error {
 	b.mgr.mu.Lock()
 	defer b.mgr.mu.Unlock()
 
+	paths, err := b.xrayInboundConfigPaths()
+	if err != nil {
+		return fmt.Errorf("failed to inspect xray inbounds: %w", err)
+	}
+	paths = append(paths, b.mgr.xrayRoutePath(), b.mgr.customRulesPath())
+	snapshot, err := snapshotFiles(paths...)
+	if err != nil {
+		return err
+	}
+
 	// Enable sniffing on Xray inbounds to detect BT protocol.
 	if err := b.enableXraySniffing(); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to enable sniffing: %w", err)
 	}
 
@@ -36,10 +48,13 @@ func (b *BTManager) Block() error {
 	}
 
 	if err := b.mgr.addXrayRule(rule); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to add BT block rule: %w", err)
 	}
 
-	b.mgr.logger.Info("BT protocol blocking enabled")
+	if b.mgr.logger != nil {
+		b.mgr.logger.Info("BT protocol blocking enabled")
+	}
 	return nil
 }
 
@@ -48,11 +63,18 @@ func (b *BTManager) Allow() error {
 	b.mgr.mu.Lock()
 	defer b.mgr.mu.Unlock()
 
+	snapshot, err := b.mgr.snapshotRoutingFiles()
+	if err != nil {
+		return err
+	}
 	if err := b.mgr.removeXrayRule("bt_block"); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to remove BT block rule: %w", err)
 	}
 
-	b.mgr.logger.Info("BT protocol blocking disabled")
+	if b.mgr.logger != nil {
+		b.mgr.logger.Info("BT protocol blocking disabled")
+	}
 	return nil
 }
 
@@ -91,12 +113,12 @@ func (b *BTManager) enableXraySniffing() error {
 		path := filepath.Join(b.mgr.xrayConfDir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			return err
 		}
 
 		var cfg map[string]interface{}
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			continue
+			return err
 		}
 
 		// Add sniffing to inbounds.
@@ -117,10 +139,33 @@ func (b *BTManager) enableXraySniffing() error {
 				}
 				if modified {
 					cfg["inbounds"] = inbounds
-					_ = security.AtomicWriteJSON(path, cfg, 0644)
+					if err := security.AtomicWriteJSON(path, cfg, 0644); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func (b *BTManager) xrayInboundConfigPaths() ([]string, error) {
+	entries, err := os.ReadDir(b.mgr.xrayConfDir)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) >= 2 && name[:2] == "05" {
+			paths = append(paths, filepath.Join(b.mgr.xrayConfDir, name))
+		}
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("未找到 Xray 入站配置文件")
+	}
+	return paths, nil
 }

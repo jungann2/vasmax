@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/sirupsen/logrus"
@@ -36,14 +37,20 @@ type Manager struct {
 	mu      sync.Mutex
 }
 
+var coreCommandRun = func(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
+}
+
 // NewManager 创建核心管理器
 func NewManager(cfg *config.Config, logger *logrus.Logger) *Manager {
-	return &Manager{
+	mgr := &Manager{
 		xray:    NewXrayCore(),
 		singbox: NewSingBox(),
 		config:  cfg,
 		logger:  logger,
 	}
+	mgr.syncConfiguredPaths()
+	return mgr
 }
 
 // InstallCore 安装指定核心（并发下载 + SHA256 校验）
@@ -70,20 +77,20 @@ func (m *Manager) UpdateCore(ctx context.Context, coreType string) error {
 	case "xray":
 		// 备份旧版本
 		if err := backupFile(m.xray.BinaryPath); err != nil {
-			m.logger.WithError(err).Warn("备份 Xray 二进制失败")
+			m.logWarn(err, "备份 Xray 二进制失败")
 		}
 		if err := m.installXray(ctx); err != nil {
 			return err
 		}
-		return m.RestartXray()
+		return m.restartCoreIfNeeded("xray")
 	case "singbox":
 		if err := backupFile(m.singbox.BinaryPath); err != nil {
-			m.logger.WithError(err).Warn("备份 sing-box 二进制失败")
+			m.logWarn(err, "备份 sing-box 二进制失败")
 		}
 		if err := m.installSingBox(ctx); err != nil {
 			return err
 		}
-		return m.RestartSingBox()
+		return m.restartCoreIfNeeded("singbox")
 	default:
 		return fmt.Errorf("未知核心类型: %s", coreType)
 	}
@@ -99,12 +106,12 @@ func (m *Manager) RollbackCore(coreType string) error {
 		if err := restoreFile(m.xray.BinaryPath); err != nil {
 			return fmt.Errorf("回滚 Xray 失败: %w", err)
 		}
-		return m.RestartXray()
+		return m.restartCoreIfNeeded("xray")
 	case "singbox":
 		if err := restoreFile(m.singbox.BinaryPath); err != nil {
 			return fmt.Errorf("回滚 sing-box 失败: %w", err)
 		}
-		return m.RestartSingBox()
+		return m.restartCoreIfNeeded("singbox")
 	default:
 		return fmt.Errorf("未知核心类型: %s", coreType)
 	}
@@ -126,56 +133,94 @@ func (m *Manager) UninstallCore(coreType string) error {
 }
 
 func (m *Manager) uninstallCore(serviceName, binaryPath string) error {
+	var errs []error
 	// 1. 停止服务
-	systemctl("stop", serviceName)
+	if err := systemctl("stop", serviceName); err != nil {
+		m.logWarn(err, "停止服务失败，继续卸载")
+	}
 
 	// 2. 禁用服务
-	exec.Command("systemctl", "disable", serviceName).Run()
+	if err := coreCommandRun("systemctl", "disable", serviceName); err != nil {
+		m.logWarn(err, "禁用服务失败，继续卸载")
+	}
 
 	// 3. 删除 service 文件
 	servicePath := "/etc/systemd/system/" + serviceName
-	os.Remove(servicePath)
+	if err := os.Remove(servicePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("remove service file: %w", err))
+	}
 
 	// 4. daemon-reload
-	systemctl("daemon-reload", "")
+	if err := systemctl("daemon-reload", ""); err != nil {
+		errs = append(errs, fmt.Errorf("daemon-reload: %w", err))
+	}
 
 	// 5. 删除二进制文件
-	os.Remove(binaryPath)
-	os.Remove(binaryPath + ".bak")
+	if err := os.Remove(binaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("remove binary: %w", err))
+	}
+	if err := os.Remove(binaryPath + ".bak"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("remove backup binary: %w", err))
+	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // StartAll 启动当前配置实际需要的核心，并停止不再被协议使用的核心。
 func (m *Manager) StartAll() error {
 	needed := m.neededCores()
+	if err := m.prepareNeededRuntimes(needed); err != nil {
+		return err
+	}
 
-	if needed["xray"] && fileExists(m.xray.BinaryPath) {
-		// 确保 service 文件存在
-		servicePath := "/etc/systemd/system/" + m.xray.ServiceName
-		if !fileExists(servicePath) {
-			m.installXrayService()
+	var errs []error
+	if needed["xray"] {
+		if err := m.startPreparedCore("xray"); err != nil {
+			errs = append(errs, err)
 		}
-		os.Chmod(m.xray.BinaryPath, 0755)
-		if err := systemctl("start", m.xray.ServiceName); err != nil {
-			m.logger.WithError(err).Error("启动 Xray 失败")
-		}
-	} else {
-		_ = systemctl("stop", m.xray.ServiceName)
 	}
-	if needed["singbox"] && fileExists(m.singbox.BinaryPath) {
-		servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
-		if !fileExists(servicePath) {
-			m.installSingBoxService()
+	if needed["singbox"] {
+		if err := m.startPreparedCore("singbox"); err != nil {
+			errs = append(errs, err)
 		}
-		os.Chmod(m.singbox.BinaryPath, 0755)
-		if err := systemctl("start", m.singbox.ServiceName); err != nil {
-			m.logger.WithError(err).Error("启动 sing-box 失败")
-		}
-	} else {
-		_ = systemctl("stop", m.singbox.ServiceName)
 	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+
+	m.stopUnusedCoreServices(needed)
 	return nil
+}
+
+func (m *Manager) startPreparedCore(coreType string) error {
+	switch coreType {
+	case "xray":
+		if err := m.ensureXrayService(); err != nil {
+			return fmt.Errorf("install xray service: %w", err)
+		}
+		if err := os.Chmod(m.xray.BinaryPath, 0755); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("chmod xray: %w", err)
+		}
+		if err := systemctl("start", m.xray.ServiceName); err != nil {
+			m.logError(err, "启动 Xray 失败")
+			return fmt.Errorf("start xray: %w", err)
+		}
+		return nil
+	case "singbox":
+		if err := m.ensureSingBoxService(); err != nil {
+			return fmt.Errorf("install sing-box service: %w", err)
+		}
+		if err := os.Chmod(m.singbox.BinaryPath, 0755); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("chmod sing-box: %w", err)
+		}
+		if err := systemctl("start", m.singbox.ServiceName); err != nil {
+			m.logError(err, "启动 sing-box 失败")
+			return fmt.Errorf("start sing-box: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown core type: %s", coreType)
+	}
 }
 
 func (m *Manager) neededCores() map[string]bool {
@@ -190,6 +235,97 @@ func (m *Manager) neededCores() map[string]bool {
 		}
 	}
 	return needed
+}
+
+func (m *Manager) coreNeeded(coreType string) bool {
+	return m.neededCores()[coreType]
+}
+
+func (m *Manager) restartCoreIfNeeded(coreType string) error {
+	if !m.coreNeeded(coreType) {
+		return nil
+	}
+	switch coreType {
+	case "xray":
+		return m.RestartXray()
+	case "singbox":
+		return m.RestartSingBox()
+	default:
+		return fmt.Errorf("unknown core type: %s", coreType)
+	}
+}
+
+// EnsureRuntimeBaseConfigs regenerates DNS/outbound base config files for the
+// cores required by the current protocol set. This keeps manual config edits,
+// DNS menu changes, daemon startup, and managed sync on the same path.
+func (m *Manager) EnsureRuntimeBaseConfigs() error {
+	m.syncConfiguredPaths()
+	needed := m.neededCores()
+	var errs []error
+
+	if needed["xray"] {
+		if err := os.MkdirAll(m.xray.ConfDir, 0755); err != nil {
+			errs = append(errs, fmt.Errorf("create xray config dir: %w", err))
+		} else if err := protocol.EnsureBaseConfigs(m.xray.ConfDir, m.config); err != nil {
+			errs = append(errs, fmt.Errorf("ensure xray base configs: %w", err))
+		}
+	}
+
+	if needed["singbox"] {
+		if err := os.MkdirAll(m.singbox.ConfDir, 0755); err != nil {
+			errs = append(errs, fmt.Errorf("create sing-box config dir: %w", err))
+		} else if err := protocol.EnsureSingBoxBaseConfigs(m.singbox.ConfDir, m.config); err != nil {
+			errs = append(errs, fmt.Errorf("ensure sing-box base configs: %w", err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func (m *Manager) prepareNeededRuntimes(needed map[string]bool) error {
+	var errs []error
+	if needed["xray"] {
+		if err := m.prepareXrayRuntime(); err != nil {
+			errs = append(errs, fmt.Errorf("prepare xray runtime: %w", err))
+		}
+	}
+	if needed["singbox"] {
+		if err := m.prepareSingBoxRuntime(); err != nil {
+			errs = append(errs, fmt.Errorf("prepare sing-box runtime: %w", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (m *Manager) prepareXrayRuntime() error {
+	m.syncConfiguredPaths()
+	if err := os.MkdirAll(m.xray.ConfDir, 0755); err != nil {
+		return fmt.Errorf("create xray config dir: %w", err)
+	}
+	if err := protocol.EnsureBaseConfigs(m.xray.ConfDir, m.config); err != nil {
+		return fmt.Errorf("ensure xray base configs: %w", err)
+	}
+	if err := os.Chmod(m.xray.BinaryPath, 0755); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("chmod xray binary: %w", err)
+	}
+	return m.TestXrayConfig()
+}
+
+func (m *Manager) prepareSingBoxRuntime() error {
+	m.syncConfiguredPaths()
+	if err := os.MkdirAll(m.singbox.ConfDir, 0755); err != nil {
+		return fmt.Errorf("create sing-box config dir: %w", err)
+	}
+	if err := protocol.EnsureSingBoxBaseConfigs(m.singbox.ConfDir, m.config); err != nil {
+		return fmt.Errorf("ensure sing-box base configs: %w", err)
+	}
+	if err := m.MergeSingBoxConfig(); err != nil {
+		return fmt.Errorf("merge sing-box config: %w", err)
+	}
+	if err := os.Chmod(m.singbox.BinaryPath, 0755); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("chmod sing-box binary: %w", err)
+	}
+	return m.TestSingBoxConfig()
 }
 
 // StopAll 停止所有核心
@@ -209,61 +345,171 @@ func (m *Manager) StopSingBox() error {
 	return systemctl("stop", m.singbox.ServiceName)
 }
 
-// RestartAll restarts the cores required by the current protocol set.
+// RestartAll restarts the cores required by the current protocol set, then
+// stops cores no longer referenced by the active protocols. Runtime preparation
+// must pass before any service is touched, so a bad config cannot stop the
+// currently working core.
 func (m *Manager) RestartAll() error {
 	needed := m.neededCores()
+	if err := m.prepareNeededRuntimes(needed); err != nil {
+		return err
+	}
 	var errs []error
-
 	if needed["xray"] {
-		if err := m.RestartXray(); err != nil {
+		if err := m.restartXrayPrepared(); err != nil {
 			errs = append(errs, fmt.Errorf("restart xray: %w", err))
 		}
 	}
 	if needed["singbox"] {
-		if err := m.MergeSingBoxConfig(); err != nil {
-			errs = append(errs, fmt.Errorf("merge sing-box config: %w", err))
-		} else if err := m.RestartSingBox(); err != nil {
+		if err := m.restartSingBoxPrepared(); err != nil {
 			errs = append(errs, fmt.Errorf("restart sing-box: %w", err))
 		}
 	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
 
-	return errors.Join(errs...)
+	m.stopUnusedCoreServices(needed)
+
+	return nil
+}
+
+func (m *Manager) stopUnusedCoreServices(needed map[string]bool) {
+	for _, service := range unusedCoreServices(needed, m.xray.ServiceName, m.singbox.ServiceName) {
+		if err := systemctl("stop", service); err != nil && m.logger != nil {
+			m.logger.WithError(err).Warnf("停止不再需要的核心服务失败: %s", service)
+		}
+	}
+}
+
+func (m *Manager) logWarn(err error, msg string) {
+	if m.logger != nil {
+		m.logger.WithError(err).Warn(msg)
+	}
+}
+
+func (m *Manager) logError(err error, msg string) {
+	if m.logger != nil {
+		m.logger.WithError(err).Error(msg)
+	}
+}
+
+func unusedCoreServices(needed map[string]bool, xrayService, singboxService string) []string {
+	var services []string
+	if !needed["xray"] && xrayService != "" {
+		services = append(services, xrayService)
+	}
+	if !needed["singbox"] && singboxService != "" {
+		services = append(services, singboxService)
+	}
+	return services
 }
 
 // ReloadXray 热重载 Xray-core（SIGUSR1）
 func (m *Manager) ReloadXray() error {
+	if err := m.TestXrayConfig(); err != nil {
+		return err
+	}
 	return exec.Command("killall", "-USR1", "xray").Run()
 }
 
 // RestartXray 重启 Xray-core（自动确保 service 文件存在）
 func (m *Manager) RestartXray() error {
-	servicePath := "/etc/systemd/system/" + m.xray.ServiceName
-	if !fileExists(servicePath) {
-		if err := m.installXrayService(); err != nil {
-			return fmt.Errorf("创建 Xray service 失败: %w", err)
-		}
+	if err := m.prepareXrayRuntime(); err != nil {
+		return err
 	}
-	// 确保二进制有可执行权限
-	os.Chmod(m.xray.BinaryPath, 0755)
+	return m.restartXrayPrepared()
+}
+
+func (m *Manager) restartXrayPrepared() error {
+	if err := m.ensureXrayService(); err != nil {
+		return fmt.Errorf("创建 Xray service 失败: %w", err)
+	}
 	return systemctl("restart", m.xray.ServiceName)
 }
 
 // MergeSingBoxConfig 合并 sing-box 配置文件到单一 config.json
 func (m *Manager) MergeSingBoxConfig() error {
+	m.syncConfiguredPaths()
 	return m.singbox.MergeConfig()
+}
+
+// TestXrayConfig validates the generated Xray config directory before reload
+// or restart so a bad write cannot immediately replace the running service.
+func (m *Manager) TestXrayConfig() error {
+	m.syncConfiguredPaths()
+	if !fileExists(m.xray.BinaryPath) {
+		return fmt.Errorf("Xray binary not found: %s", m.xray.BinaryPath)
+	}
+	output, err := exec.Command(m.xray.BinaryPath, "test", "-confdir", m.xray.ConfDir).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Xray config test failed: %w: %s", err, commandOutputSnippet(output))
+	}
+	return nil
+}
+
+// TestSingBoxConfig validates the merged sing-box config before restart.
+func (m *Manager) TestSingBoxConfig() error {
+	m.syncConfiguredPaths()
+	if !fileExists(m.singbox.BinaryPath) {
+		return fmt.Errorf("sing-box binary not found: %s", m.singbox.BinaryPath)
+	}
+	if !fileExists(m.singbox.ConfigFile) {
+		return fmt.Errorf("sing-box config file not found: %s", m.singbox.ConfigFile)
+	}
+	output, err := exec.Command(m.singbox.BinaryPath, "check", "-c", m.singbox.ConfigFile).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sing-box config check failed: %w: %s", err, commandOutputSnippet(output))
+	}
+	return nil
 }
 
 // RestartSingBox 重启 sing-box（自动确保 service 文件存在）
 func (m *Manager) RestartSingBox() error {
-	servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
-	if !fileExists(servicePath) {
-		if err := m.installSingBoxService(); err != nil {
-			return fmt.Errorf("创建 sing-box service 失败: %w", err)
-		}
+	if err := m.prepareSingBoxRuntime(); err != nil {
+		return err
 	}
-	// 确保二进制有可执行权限
-	os.Chmod(m.singbox.BinaryPath, 0755)
+	return m.restartSingBoxPrepared()
+}
+
+func (m *Manager) restartSingBoxPrepared() error {
+	if err := m.ensureSingBoxService(); err != nil {
+		return fmt.Errorf("创建 sing-box service 失败: %w", err)
+	}
 	return systemctl("restart", m.singbox.ServiceName)
+}
+
+func (m *Manager) syncConfiguredPaths() {
+	if m.config == nil {
+		return
+	}
+	if confDir := strings.TrimSpace(m.config.Paths.XrayConf); confDir != "" {
+		m.xray.ConfDir = confDir
+	}
+	if confDir := strings.TrimSpace(m.config.Paths.SingBoxConf); confDir != "" {
+		m.singbox.ConfDir = confDir
+		m.singbox.ConfigFile = singBoxConfigFileForConfDir(confDir)
+	}
+}
+
+func singBoxConfigFileForConfDir(confDir string) string {
+	confDir = strings.TrimSpace(confDir)
+	if confDir == "" {
+		confDir = "/etc/vasmax/sing-box/conf/config/"
+	}
+	clean := filepath.Clean(confDir)
+	return filepath.Join(filepath.Dir(clean), "config.json")
+}
+
+func commandOutputSnippet(output []byte) string {
+	text := strings.TrimSpace(string(output))
+	if text == "" {
+		return "<no output>"
+	}
+	if len(text) > 2000 {
+		return text[:2000] + "...(truncated)"
+	}
+	return text
 }
 
 // GetStatus 获取核心运行状态
@@ -294,7 +540,9 @@ func (m *Manager) installXray(ctx context.Context) error {
 		{URL: m.xray.DownloadURL(), DestPath: zipPath, Name: "xray-core"},
 	}
 	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
-		m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
+		if m.logger != nil {
+			m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
+		}
 	}); err != nil {
 		return err
 	}
@@ -307,7 +555,7 @@ func (m *Manager) installXray(ctx context.Context) error {
 
 	// 设置可执行权限
 	if err := os.Chmod(m.xray.BinaryPath, 0755); err != nil {
-		m.logger.WithError(err).Warn("设置 Xray 可执行权限失败")
+		m.logWarn(err, "设置 Xray 可执行权限失败")
 	}
 
 	// 创建配置目录
@@ -319,7 +567,17 @@ func (m *Manager) installXray(ctx context.Context) error {
 
 // installXrayService 创建 Xray systemd service 文件
 func (m *Manager) installXrayService() error {
-	serviceContent := fmt.Sprintf(`[Unit]
+	m.syncConfiguredPaths()
+	return m.writeSystemdService("/etc/systemd/system/"+m.xray.ServiceName, m.xray.ServiceName, m.xrayServiceContent())
+}
+
+func (m *Manager) ensureXrayService() error {
+	m.syncConfiguredPaths()
+	return m.ensureSystemdService("/etc/systemd/system/"+m.xray.ServiceName, m.xray.ServiceName, m.xrayServiceContent())
+}
+
+func (m *Manager) xrayServiceContent() string {
+	return fmt.Sprintf(`[Unit]
 Description=Xray Service
 Documentation=https://xtls.github.io
 After=network.target nss-lookup.target
@@ -338,20 +596,6 @@ LimitNOFILE=1000000
 [Install]
 WantedBy=multi-user.target
 `, m.xray.BinaryPath, m.xray.ConfDir)
-
-	servicePath := "/etc/systemd/system/" + m.xray.ServiceName
-	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
-		return fmt.Errorf("创建 Xray service 文件失败: %w", err)
-	}
-
-	if err := systemctl("daemon-reload", ""); err != nil {
-		m.logger.WithError(err).Warn("systemctl daemon-reload 失败")
-	}
-	if err := exec.Command("systemctl", "enable", m.xray.ServiceName).Run(); err != nil {
-		m.logger.WithError(err).Warn("systemctl enable xray 失败")
-	}
-
-	return nil
 }
 
 func (m *Manager) installSingBox(ctx context.Context) error {
@@ -361,7 +605,9 @@ func (m *Manager) installSingBox(ctx context.Context) error {
 		{URL: m.singbox.DownloadURL(), DestPath: tgzPath, Name: "sing-box"},
 	}
 	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
-		m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
+		if m.logger != nil {
+			m.logger.WithFields(logrus.Fields{"name": name, "progress": pct}).Info("下载进度")
+		}
 	}); err != nil {
 		return err
 	}
@@ -374,7 +620,7 @@ func (m *Manager) installSingBox(ctx context.Context) error {
 
 	// 设置可执行权限
 	if err := os.Chmod(m.singbox.BinaryPath, 0755); err != nil {
-		m.logger.WithError(err).Warn("设置 sing-box 可执行权限失败")
+		m.logWarn(err, "设置 sing-box 可执行权限失败")
 	}
 
 	// 创建配置目录
@@ -386,7 +632,17 @@ func (m *Manager) installSingBox(ctx context.Context) error {
 
 // installSingBoxService 创建 sing-box systemd service 文件
 func (m *Manager) installSingBoxService() error {
-	serviceContent := fmt.Sprintf(`[Unit]
+	m.syncConfiguredPaths()
+	return m.writeSystemdService("/etc/systemd/system/"+m.singbox.ServiceName, m.singbox.ServiceName, m.singBoxServiceContent())
+}
+
+func (m *Manager) ensureSingBoxService() error {
+	m.syncConfiguredPaths()
+	return m.ensureSystemdService("/etc/systemd/system/"+m.singbox.ServiceName, m.singbox.ServiceName, m.singBoxServiceContent())
+}
+
+func (m *Manager) singBoxServiceContent() string {
+	return fmt.Sprintf(`[Unit]
 Description=sing-box Service
 Documentation=https://sing-box.sagernet.org
 After=network.target nss-lookup.target
@@ -395,7 +651,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=%s run -C %s
+ExecStart=%s run -c %s
 Restart=on-failure
 RestartPreventExitStatus=23
 RestartSec=10
@@ -404,18 +660,34 @@ LimitNOFILE=1000000
 
 [Install]
 WantedBy=multi-user.target
-`, m.singbox.BinaryPath, m.singbox.ConfDir)
+`, m.singbox.BinaryPath, m.singbox.ConfigFile)
+}
 
-	servicePath := "/etc/systemd/system/" + m.singbox.ServiceName
-	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
-		return fmt.Errorf("创建 sing-box service 文件失败: %w", err)
+func (m *Manager) ensureSystemdService(servicePath, serviceName, content string) error {
+	current, err := os.ReadFile(servicePath)
+	if err == nil && string(current) == content {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("读取 service 文件失败: %w", err)
+	}
+	return m.writeSystemdService(servicePath, serviceName, content)
+}
+
+func (m *Manager) writeSystemdService(servicePath, serviceName, content string) error {
+	if err := os.WriteFile(servicePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("创建 service 文件失败: %w", err)
 	}
 
 	if err := systemctl("daemon-reload", ""); err != nil {
-		m.logger.WithError(err).Warn("systemctl daemon-reload 失败")
+		if m.logger != nil {
+			m.logger.WithError(err).Warn("systemctl daemon-reload 失败")
+		}
 	}
-	if err := exec.Command("systemctl", "enable", m.singbox.ServiceName).Run(); err != nil {
-		m.logger.WithError(err).Warn("systemctl enable sing-box 失败")
+	if err := coreCommandRun("systemctl", "enable", serviceName); err != nil {
+		if m.logger != nil {
+			m.logger.WithError(err).Warnf("systemctl enable %s 失败", serviceName)
+		}
 	}
 
 	return nil
@@ -425,13 +697,13 @@ WantedBy=multi-user.target
 
 func systemctl(action, service string) error {
 	if service == "" {
-		return exec.Command("systemctl", action).Run()
+		return coreCommandRun("systemctl", action)
 	}
-	return exec.Command("systemctl", action, service).Run()
+	return coreCommandRun("systemctl", action, service)
 }
 
 func isServiceRunning(service string) bool {
-	return exec.Command("systemctl", "is-active", "--quiet", service).Run() == nil
+	return coreCommandRun("systemctl", "is-active", "--quiet", service) == nil
 }
 
 func fileExists(path string) bool {
@@ -477,22 +749,11 @@ func extractFromZip(zipPath, targetName, destPath string) error {
 			return fmt.Errorf("读取 zip 条目失败: %w", err)
 		}
 
-		os.MkdirAll(filepath.Dir(destPath), 0755)
-		out, err := os.Create(destPath)
-		if err != nil {
-			rc.Close()
-			return fmt.Errorf("创建目标文件失败: %w", err)
-		}
-
-		_, copyErr := io.Copy(out, rc)
+		copyErr := copyReaderAtomic(rc, destPath)
 		rc.Close()
-		closeErr := out.Close()
 
 		if copyErr != nil {
 			return fmt.Errorf("写入目标文件失败: %w", copyErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("关闭目标文件失败: %w", closeErr)
 		}
 		return nil
 	}
@@ -529,23 +790,36 @@ func extractFromTarGz(tgzPath, targetName, destPath string) error {
 			continue
 		}
 
-		os.MkdirAll(filepath.Dir(destPath), 0755)
-		out, err := os.Create(destPath)
-		if err != nil {
-			return fmt.Errorf("创建目标文件失败: %w", err)
-		}
-
-		_, copyErr := io.Copy(out, tr)
-		closeErr := out.Close()
-
-		if copyErr != nil {
+		if copyErr := copyReaderAtomic(tr, destPath); copyErr != nil {
 			return fmt.Errorf("写入目标文件失败: %w", copyErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("关闭目标文件失败: %w", closeErr)
 		}
 		return nil
 	}
 
 	return fmt.Errorf("tar.gz 包中未找到 %s", targetName)
+}
+
+func copyReaderAtomic(r io.Reader, destPath string) error {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return fmt.Errorf("创建目标目录失败: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), ".extract-*")
+	if err != nil {
+		return fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	_, copyErr := io.Copy(tmp, r)
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return fmt.Errorf("替换目标文件失败: %w", err)
+	}
+	return nil
 }

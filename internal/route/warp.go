@@ -50,7 +50,9 @@ func (w *WARPManager) Setup() error {
 	// Register WARP.
 	if err := runWarpCmd("register"); err != nil {
 		// May already be registered.
-		w.logger.Warn("WARP register returned error (may already be registered)")
+		if w.logger != nil {
+			w.logger.Warn("WARP register returned error (may already be registered)")
+		}
 	}
 
 	// Set proxy mode.
@@ -65,7 +67,9 @@ func (w *WARPManager) Setup() error {
 
 	// Enable always-on.
 	if err := runWarpCmd("enable-always-on"); err != nil {
-		w.logger.Warn("failed to enable WARP always-on")
+		if w.logger != nil {
+			w.logger.Warn("failed to enable WARP always-on")
+		}
 	}
 
 	// Connect.
@@ -73,7 +77,9 @@ func (w *WARPManager) Setup() error {
 		return fmt.Errorf("failed to connect WARP: %w", err)
 	}
 
-	w.logger.Info("WARP configured and connected")
+	if w.logger != nil {
+		w.logger.Info("WARP configured and connected")
+	}
 	return nil
 }
 
@@ -97,7 +103,9 @@ func (w *WARPManager) TestConnection() error {
 		return fmt.Errorf("WARP not connected: %s", strings.TrimSpace(string(output)))
 	}
 
-	w.logger.Info("WARP connection test passed")
+	if w.logger != nil {
+		w.logger.Info("WARP connection test passed")
+	}
 	return nil
 }
 

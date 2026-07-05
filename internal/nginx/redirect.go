@@ -57,7 +57,9 @@ func (m *Manager) AddRedirect(domain, sourcePath, targetURL string) error {
 		return err
 	}
 
-	m.logger.Infof("added redirect: %s -> %s", sourcePath, targetURL)
+	if m.logger != nil {
+		m.logger.Infof("added redirect: %s -> %s", sourcePath, targetURL)
+	}
 	return nil
 }
 
@@ -96,7 +98,9 @@ func (m *Manager) RemoveRedirect(domain, sourcePath string) error {
 		return err
 	}
 
-	m.logger.Infof("removed redirect: %s", sourcePath)
+	if m.logger != nil {
+		m.logger.Infof("removed redirect: %s", sourcePath)
+	}
 	return nil
 }
 

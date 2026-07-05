@@ -120,6 +120,11 @@ func (m *CoreMenu) updateGeoData() {
 		PrintError(fmt.Sprintf("更新失败: %v", err))
 	} else {
 		PrintSuccess("GeoData 更新完成")
+		if err := core.InstallGeoDataCron(); err != nil {
+			PrintWarning(fmt.Sprintf("安装 GeoData 自动更新任务失败: %v", err))
+		} else {
+			PrintSuccess("GeoData 自动更新任务已安装/修复（每天 04:00）")
+		}
 	}
 }
 

@@ -24,7 +24,7 @@ func (v *VlessTCPTLSVision) GenerateInbound(params *InboundParams) (json.RawMess
 		"certificates": []map[string]interface{}{
 			{"certificateFile": params.CertFile, "keyFile": params.KeyFile},
 		},
-		"alpn": []string{"h2", "http/1.1"},
+		"alpn": inboundALPN(params, defaultTLSALPN),
 	}
 	for k, val := range tlsVersionSettings(params) {
 		tlsSettings[k] = val
@@ -66,7 +66,7 @@ func (v *VlessTCPTLSVision) GenerateURI(user *api.User, info *ServerInfo) string
 	params.Set("security", "tls")
 	params.Set("sni", info.Domain)
 	params.Set("flow", "xtls-rprx-vision")
-	params.Set("alpn", "h2,http/1.1")
+	params.Set("alpn", alpnQueryValue(serverInfoALPN(info, defaultTLSALPN)))
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, host, info.Port, params.Encode(),
 		url.PathEscape(fmt.Sprintf("%s-vless-vision", info.Domain)))
 }
@@ -83,7 +83,7 @@ func (v *VlessTCPTLSVision) GenerateClashProxy(user *api.User, info *ServerInfo)
 		"flow":               "xtls-rprx-vision",
 		"network":            "tcp",
 		"client-fingerprint": "chrome",
-		"alpn":               []string{"h2", "http/1.1"},
+		"alpn":               serverInfoALPN(info, defaultTLSALPN),
 	}
 	markClashUDP(proxy)
 	markClashSkipCertVerify(proxy, info)
@@ -101,7 +101,7 @@ func (v *VlessTCPTLSVision) GenerateSingBoxOutbound(user *api.User, info *Server
 		"tls": map[string]interface{}{
 			"enabled":     true,
 			"server_name": info.Domain,
-			"alpn":        []string{"h2", "http/1.1"},
+			"alpn":        serverInfoALPN(info, defaultTLSALPN),
 		},
 	}
 	markSingBoxTLSInsecure(outbound, info)
@@ -374,12 +374,12 @@ func (v *VlessRealityVision) GenerateURI(user *api.User, info *ServerInfo) strin
 	}
 	params.Set("fp", "chrome")
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-reality-vision", effectiveHost(info))))
+		url.PathEscape(serverInfoName(info, fmt.Sprintf("%s-reality-vision", effectiveHost(info)))))
 }
 
 func (v *VlessRealityVision) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	m := map[string]interface{}{
-		"name":               fmt.Sprintf("%s-reality-vision", info.Host),
+		"name":               serverInfoName(info, fmt.Sprintf("%s-reality-vision", info.Host)),
 		"type":               "vless",
 		"server":             info.Host,
 		"port":               info.Port,
@@ -393,8 +393,9 @@ func (v *VlessRealityVision) GenerateClashProxy(user *api.User, info *ServerInfo
 	if info.Reality != nil {
 		m["servername"] = info.Reality.ServerName
 		m["reality-opts"] = map[string]interface{}{
-			"public-key": info.Reality.PublicKey,
-			"short-id":   info.Reality.ShortID,
+			"public-key":             info.Reality.PublicKey,
+			"short-id":               info.Reality.ShortID,
+			"support-x25519mlkem768": false,
 		}
 	}
 	return m
@@ -418,7 +419,7 @@ func (v *VlessRealityVision) GenerateSingBoxOutbound(user *api.User, info *Serve
 	}
 	return map[string]interface{}{
 		"type":        "vless",
-		"tag":         fmt.Sprintf("%s-reality-vision", info.Host),
+		"tag":         serverInfoName(info, fmt.Sprintf("%s-reality-vision", info.Host)),
 		"server":      info.Host,
 		"server_port": info.Port,
 		"uuid":        user.UUID,
@@ -494,12 +495,12 @@ func (v *VlessRealityGRPC) GenerateURI(user *api.User, info *ServerInfo) string 
 		params.Set("sid", info.Reality.ShortID)
 	}
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-reality-grpc", effectiveHost(info))))
+		url.PathEscape(serverInfoName(info, fmt.Sprintf("%s-reality-grpc", effectiveHost(info)))))
 }
 
 func (v *VlessRealityGRPC) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	m := map[string]interface{}{
-		"name":               fmt.Sprintf("%s-reality-grpc", info.Host),
+		"name":               serverInfoName(info, fmt.Sprintf("%s-reality-grpc", info.Host)),
 		"type":               "vless",
 		"server":             info.Host,
 		"port":               info.Port,
@@ -515,8 +516,9 @@ func (v *VlessRealityGRPC) GenerateClashProxy(user *api.User, info *ServerInfo) 
 	if info.Reality != nil {
 		m["servername"] = info.Reality.ServerName
 		m["reality-opts"] = map[string]interface{}{
-			"public-key": info.Reality.PublicKey,
-			"short-id":   info.Reality.ShortID,
+			"public-key":             info.Reality.PublicKey,
+			"short-id":               info.Reality.ShortID,
+			"support-x25519mlkem768": false,
 		}
 	}
 	return m
@@ -540,7 +542,7 @@ func (v *VlessRealityGRPC) GenerateSingBoxOutbound(user *api.User, info *ServerI
 	}
 	return map[string]interface{}{
 		"type":        "vless",
-		"tag":         fmt.Sprintf("%s-reality-grpc", info.Host),
+		"tag":         serverInfoName(info, fmt.Sprintf("%s-reality-grpc", info.Host)),
 		"server":      info.Host,
 		"server_port": info.Port,
 		"uuid":        user.UUID,
@@ -619,12 +621,12 @@ func (v *VlessRealityXHTTP) GenerateURI(user *api.User, info *ServerInfo) string
 		params.Set("sid", info.Reality.ShortID)
 	}
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", user.UUID, effectiveHost(info), info.Port, params.Encode(),
-		url.PathEscape(fmt.Sprintf("%s-reality-xhttp", effectiveHost(info))))
+		url.PathEscape(serverInfoName(info, fmt.Sprintf("%s-reality-xhttp", effectiveHost(info)))))
 }
 
 func (v *VlessRealityXHTTP) GenerateClashProxy(user *api.User, info *ServerInfo) map[string]interface{} {
 	m := map[string]interface{}{
-		"name":               fmt.Sprintf("%s-reality-xhttp", info.Host),
+		"name":               serverInfoName(info, fmt.Sprintf("%s-reality-xhttp", info.Host)),
 		"type":               "vless",
 		"server":             info.Host,
 		"port":               info.Port,
@@ -640,8 +642,9 @@ func (v *VlessRealityXHTTP) GenerateClashProxy(user *api.User, info *ServerInfo)
 	if info.Reality != nil {
 		m["servername"] = info.Reality.ServerName
 		m["reality-opts"] = map[string]interface{}{
-			"public-key": info.Reality.PublicKey,
-			"short-id":   info.Reality.ShortID,
+			"public-key":             info.Reality.PublicKey,
+			"short-id":               info.Reality.ShortID,
+			"support-x25519mlkem768": false,
 		}
 	}
 	return m
@@ -665,7 +668,7 @@ func (v *VlessRealityXHTTP) GenerateSingBoxOutbound(user *api.User, info *Server
 	}
 	return map[string]interface{}{
 		"type":        "vless",
-		"tag":         fmt.Sprintf("%s-reality-xhttp", info.Host),
+		"tag":         serverInfoName(info, fmt.Sprintf("%s-reality-xhttp", info.Host)),
 		"server":      info.Host,
 		"server_port": info.Port,
 		"uuid":        user.UUID,
@@ -693,6 +696,13 @@ func tlsVersionSettings(params *InboundParams) map[string]interface{} {
 	m["minVersion"] = min
 	m["maxVersion"] = max
 	return m
+}
+
+func serverInfoName(info *ServerInfo, fallback string) string {
+	if info != nil && info.Name != "" {
+		return info.Name
+	}
+	return fallback
 }
 
 // buildVLESSClients 构建 VLESS 用户列表

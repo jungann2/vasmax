@@ -3,6 +3,7 @@ package menu
 import (
 	"fmt"
 
+	"vasmax/internal/core"
 	"vasmax/internal/route"
 )
 
@@ -12,11 +13,12 @@ type RoutingMenu struct {
 	btMgr    *route.BTManager
 	blMgr    *route.BlacklistManager
 	warpMgr  *route.WARPManager
+	coreMgr  *core.Manager
 }
 
 // NewRoutingMenu creates a new routing menu.
-func NewRoutingMenu(routeMgr *route.Manager, btMgr *route.BTManager, blMgr *route.BlacklistManager, warpMgr *route.WARPManager) *RoutingMenu {
-	return &RoutingMenu{routeMgr: routeMgr, btMgr: btMgr, blMgr: blMgr, warpMgr: warpMgr}
+func NewRoutingMenu(routeMgr *route.Manager, btMgr *route.BTManager, blMgr *route.BlacklistManager, warpMgr *route.WARPManager, coreMgr *core.Manager) *RoutingMenu {
+	return &RoutingMenu{routeMgr: routeMgr, btMgr: btMgr, blMgr: blMgr, warpMgr: warpMgr, coreMgr: coreMgr}
 }
 
 // ShowBTMenu directly shows the BT download management sub-menu.
@@ -117,12 +119,14 @@ func (m *RoutingMenu) btMenu() {
 			PrintError(fmt.Sprintf("阻断失败: %v", err))
 		} else {
 			PrintSuccess("BT 下载已阻断")
+			m.applyRoutingChanges()
 		}
 	case "2":
 		if err := m.btMgr.Allow(); err != nil {
 			PrintError(fmt.Sprintf("允许失败: %v", err))
 		} else {
 			PrintSuccess("BT 下载已允许")
+			m.applyRoutingChanges()
 		}
 	}
 }
@@ -158,6 +162,7 @@ func (m *RoutingMenu) blacklistMenu() {
 				PrintError(fmt.Sprintf("添加失败: %v", err))
 			} else {
 				PrintSuccess(fmt.Sprintf("已添加: %s", domain))
+				m.applyRoutingChanges()
 			}
 		}
 	case "3":
@@ -167,6 +172,7 @@ func (m *RoutingMenu) blacklistMenu() {
 				PrintError(fmt.Sprintf("删除失败: %v", err))
 			} else {
 				PrintSuccess(fmt.Sprintf("已移除: %s", domain))
+				m.applyRoutingChanges()
 			}
 		}
 	case "4":
@@ -174,14 +180,30 @@ func (m *RoutingMenu) blacklistMenu() {
 			PrintError(fmt.Sprintf("阻断失败: %v", err))
 		} else {
 			PrintSuccess("已阻断中国大陆域名(geosite:cn)")
+			m.applyRoutingChanges()
 		}
 	case "5":
 		if err := m.blMgr.UnblockChina(); err != nil {
 			PrintError(fmt.Sprintf("取消失败: %v", err))
 		} else {
 			PrintSuccess("已取消阻断中国大陆域名")
+			m.applyRoutingChanges()
 		}
 	}
+}
+
+func (m *RoutingMenu) applyRoutingChanges() {
+	if m == nil || m.coreMgr == nil {
+		PrintWarning("路由配置已写入；未绑定核心管理器，请手动重启当前使用的核心后生效")
+		return
+	}
+	PrintInfo("正在应用路由配置...")
+	if err := m.coreMgr.RestartAll(); err != nil {
+		PrintWarning(fmt.Sprintf("路由配置已写入，但重启核心失败: %v", err))
+		PrintWarning("请检查核心配置后手动重启 Xray/sing-box")
+		return
+	}
+	PrintSuccess("路由配置已应用")
 }
 
 func (m *RoutingMenu) listRules() {

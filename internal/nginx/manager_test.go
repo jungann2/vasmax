@@ -1,8 +1,14 @@
 package nginx
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sirupsen/logrus"
 
 	"vasmax/internal/config"
 )
@@ -16,6 +22,163 @@ func TestLocationTagIncludesPath(t *testing.T) {
 	}
 	if !strings.Contains(wsTag, "VLESSWS") {
 		t.Fatalf("expected path in tag, got %q", wsTag)
+	}
+}
+
+func TestConfigTransactionRestoresOldConfigOnValidateFailure(t *testing.T) {
+	oldValidate := validateNginxConfig
+	defer func() { validateNginxConfig = oldValidate }()
+	validateNginxConfig = func() error { return errors.New("bad nginx config") }
+
+	confDir := t.TempDir()
+	confPath := filepath.Join(confDir, "node.example.com.conf")
+	oldContent := "server { # old }\n"
+	if err := os.WriteFile(confPath, []byte(oldContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(confDir, nil)
+	err := m.GenerateConfigSafe(&NginxParams{
+		Domain:   "node.example.com",
+		CertFile: "/etc/ssl/cert.pem",
+		KeyFile:  "/etc/ssl/key.pem",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	got, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != oldContent {
+		t.Fatalf("expected old config restored, got:\n%s", string(got))
+	}
+}
+
+func TestConfigTransactionRestoresOldConfigModeOnValidateFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not preserve POSIX file modes")
+	}
+	oldValidate := validateNginxConfig
+	defer func() { validateNginxConfig = oldValidate }()
+	validateNginxConfig = func() error { return errors.New("bad nginx config") }
+
+	confDir := t.TempDir()
+	confPath := filepath.Join(confDir, "node.example.com.conf")
+	oldContent := "server { # old }\n"
+	if err := os.WriteFile(confPath, []byte(oldContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(confDir, nil)
+	err := m.GenerateConfigSafe(&NginxParams{
+		Domain:   "node.example.com",
+		CertFile: "/etc/ssl/cert.pem",
+		KeyFile:  "/etc/ssl/key.pem",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	info, statErr := os.Stat(confPath)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("expected restored mode 0600, got %v", info.Mode().Perm())
+	}
+}
+
+func TestConfigTransactionRemovesNewConfigOnValidateFailure(t *testing.T) {
+	oldValidate := validateNginxConfig
+	defer func() { validateNginxConfig = oldValidate }()
+	validateNginxConfig = func() error { return errors.New("bad nginx config") }
+
+	confDir := t.TempDir()
+	confPath := filepath.Join(confDir, "node.example.com.conf")
+	m := NewManager(confDir, nil)
+	err := m.GenerateConfigSafe(&NginxParams{
+		Domain:   "node.example.com",
+		CertFile: "/etc/ssl/cert.pem",
+		KeyFile:  "/etc/ssl/key.pem",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if _, statErr := os.Stat(confPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected new config removed, stat err=%v", statErr)
+	}
+}
+
+func TestConfigTransactionRestoresOnReloadFailure(t *testing.T) {
+	oldValidate := validateNginxConfig
+	oldReload := reloadNginxConfig
+	defer func() {
+		validateNginxConfig = oldValidate
+		reloadNginxConfig = oldReload
+	}()
+	validateNginxConfig = func() error { return nil }
+	reloadNginxConfig = func(_ *logrus.Logger) error { return errors.New("reload failed") }
+
+	confDir := t.TempDir()
+	confPath := filepath.Join(confDir, "node.example.com.conf")
+	oldContent := "server { # old }\n"
+	if err := os.WriteFile(confPath, []byte(oldContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(confDir, nil)
+	tx := m.BeginConfigTransaction()
+	if err := tx.GenerateConfig(&NginxParams{
+		Domain:   "node.example.com",
+		CertFile: "/etc/ssl/cert.pem",
+		KeyFile:  "/etc/ssl/key.pem",
+	}); err != nil {
+		t.Fatalf("generate should pass: %v", err)
+	}
+	if err := tx.Reload(); err == nil {
+		t.Fatal("expected reload error")
+	}
+	got, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != oldContent {
+		t.Fatalf("expected old config restored after reload failure, got:\n%s", string(got))
+	}
+}
+
+func TestConfigTransactionRemoveLocationRestoresOnValidateFailure(t *testing.T) {
+	oldValidate := validateNginxConfig
+	defer func() { validateNginxConfig = oldValidate }()
+	validateNginxConfig = func() error { return errors.New("bad nginx config") }
+
+	confDir := t.TempDir()
+	confPath := filepath.Join(confDir, "node.example.com.conf")
+	oldContent := strings.Join([]string{
+		"server {",
+		"    # --- BEGIN WS_VLESSWS ---",
+		"    location /vlessws {",
+		"        proxy_pass http://127.0.0.1:31297;",
+		"    }",
+		"    # --- END WS_VLESSWS ---",
+		"    # --- END LOCATIONS ---",
+		"}",
+	}, "\n")
+	if err := os.WriteFile(confPath, []byte(oldContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(confDir, nil)
+	tx := m.BeginConfigTransaction()
+	if err := tx.RemoveLocationByPath("node.example.com", "ws", "/vlessws"); err == nil {
+		t.Fatal("expected validation error")
+	}
+	got, readErr := os.ReadFile(confPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != oldContent {
+		t.Fatalf("expected old config restored, got:\n%s", string(got))
 	}
 }
 
@@ -63,6 +226,7 @@ func TestLocationBlockUsesLongConnectionSettings(t *testing.T) {
 			expected: []string{
 				"proxy_read_timeout 86400s;",
 				"proxy_send_timeout 86400s;",
+				"proxy_socket_keepalive on;",
 				"proxy_buffering off;",
 				"proxy_request_buffering off;",
 			},
@@ -74,6 +238,7 @@ func TestLocationBlockUsesLongConnectionSettings(t *testing.T) {
 			expected: []string{
 				"proxy_read_timeout 86400s;",
 				"proxy_send_timeout 86400s;",
+				"proxy_socket_keepalive on;",
 				"proxy_buffering off;",
 				"proxy_request_buffering off;",
 			},
@@ -85,6 +250,7 @@ func TestLocationBlockUsesLongConnectionSettings(t *testing.T) {
 			expected: []string{
 				"grpc_read_timeout 86400s;",
 				"grpc_send_timeout 86400s;",
+				"grpc_socket_keepalive on;",
 			},
 		},
 	}

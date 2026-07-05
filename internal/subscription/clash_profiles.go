@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,13 +61,19 @@ func GenerateClashFullProfileWithOptions(proxies []map[string]interface{}, domai
 
 // buildClashProxyGroups 构建 ClashMeta proxy-groups
 func buildClashProxyGroups(proxyNames []string, testURL string) []map[string]interface{} {
+	realityNames := filterRealityProxyNames(proxyNames)
+	manualProxies := append([]string{"自动选择", "DIRECT"}, proxyNames...)
+	if len(realityNames) > 1 {
+		manualProxies = append([]string{"Reality智能"}, manualProxies...)
+	}
+
 	groups := []struct {
 		name    string
 		gtype   string
 		proxies []string
 		extra   map[string]interface{}
 	}{
-		{"手动切换", "select", append([]string{"自动选择", "DIRECT"}, proxyNames...), nil},
+		{"手动切换", "select", manualProxies, nil},
 		{"自动选择", "url-test", proxyNames, map[string]interface{}{"url": testURL, "interval": 300}},
 		{"国外流量", "select", []string{"手动切换", "自动选择", "DIRECT"}, nil},
 		{"流媒体", "select", append([]string{"手动切换", "自动选择"}, proxyNames...), nil},
@@ -81,7 +88,16 @@ func buildClashProxyGroups(proxyNames []string, testURL string) []map[string]int
 		{"兜底规则", "select", []string{"手动切换", "自动选择", "DIRECT"}, nil},
 	}
 
-	result := make([]map[string]interface{}, 0, len(groups))
+	result := make([]map[string]interface{}, 0, len(groups)+1)
+	if len(realityNames) > 1 {
+		result = append(result, map[string]interface{}{
+			"name":     "Reality智能",
+			"type":     "fallback",
+			"proxies":  realityNames,
+			"url":      testURL,
+			"interval": 300,
+		})
+	}
 	for _, g := range groups {
 		m := map[string]interface{}{
 			"name":    g.name,
@@ -94,6 +110,16 @@ func buildClashProxyGroups(proxyNames []string, testURL string) []map[string]int
 		result = append(result, m)
 	}
 	return result
+}
+
+func filterRealityProxyNames(proxyNames []string) []string {
+	names := make([]string, 0)
+	for _, name := range proxyNames {
+		if strings.Contains(name, "-reality-") {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // buildClashRuleProviders 构建 GeoX 规则集提供者

@@ -117,7 +117,7 @@ func TestClashProxiesEnableUDPForTUNClients(t *testing.T) {
 	}
 }
 
-func TestRealityClashProxiesDoNotUseSelfSignedSkipVerify(t *testing.T) {
+func TestRealityClashProxiesSetPostQuantumCompatFlag(t *testing.T) {
 	user := &api.User{ID: 1, UUID: "11111111-1111-1111-1111-111111111111"}
 	info := &ServerInfo{
 		Host:   "203.0.113.10",
@@ -138,8 +138,12 @@ func TestRealityClashProxiesDoNotUseSelfSignedSkipVerify(t *testing.T) {
 
 	for _, p := range protocols {
 		proxy := p.GenerateClashProxy(user, info)
-		if _, ok := proxy["skip-cert-verify"]; ok {
-			t.Fatalf("%s reality proxy should not set skip-cert-verify: %#v", p.Name(), proxy)
+		opts, ok := proxy["reality-opts"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s reality proxy should include reality-opts: %#v", p.Name(), proxy)
+		}
+		if opts["support-x25519mlkem768"] != false {
+			t.Fatalf("%s reality proxy should disable x25519mlkem768 by default: %#v", p.Name(), proxy)
 		}
 	}
 }

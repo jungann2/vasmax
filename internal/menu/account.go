@@ -4,19 +4,25 @@ import (
 	"crypto/rand"
 	"fmt"
 
+	"vasmax/internal/config"
+	"vasmax/internal/core"
+	"vasmax/internal/protocol"
 	"vasmax/internal/subscription"
 	"vasmax/internal/user"
 )
 
 // AccountMenu handles user account management.
 type AccountMenu struct {
-	userMgr *user.Manager
-	subMgr  *subscription.Manager
+	config   *config.Config
+	coreMgr  *core.Manager
+	registry *protocol.Registry
+	userMgr  *user.Manager
+	subMgr   *subscription.Manager
 }
 
 // NewAccountMenu creates a new account menu.
-func NewAccountMenu(userMgr *user.Manager, subMgr *subscription.Manager) *AccountMenu {
-	return &AccountMenu{userMgr: userMgr, subMgr: subMgr}
+func NewAccountMenu(cfg *config.Config, coreMgr *core.Manager, reg *protocol.Registry, userMgr *user.Manager, subMgr *subscription.Manager) *AccountMenu {
+	return &AccountMenu{config: cfg, coreMgr: coreMgr, registry: reg, userMgr: userMgr, subMgr: subMgr}
 }
 
 // Show displays the account management menu.
@@ -72,12 +78,7 @@ func (m *AccountMenu) addUser() {
 
 	PrintSuccess(fmt.Sprintf("用户已添加: %s", uuid))
 
-	// 重新生成订阅
-	if m.subMgr != nil {
-		if err := m.subMgr.GenerateAll(); err != nil {
-			PrintWarning(fmt.Sprintf("重新生成订阅失败: %v", err))
-		}
-	}
+	m.applyRuntimeAndSubscriptions()
 }
 
 func (m *AccountMenu) removeUser() {
@@ -116,12 +117,7 @@ func (m *AccountMenu) removeUser() {
 
 	PrintSuccess(fmt.Sprintf("用户 %s 已删除", target.Email))
 
-	// 重新生成订阅（移除已删除用户的订阅文件）
-	if m.subMgr != nil {
-		if err := m.subMgr.GenerateAll(); err != nil {
-			PrintWarning(fmt.Sprintf("重新生成订阅失败: %v", err))
-		}
-	}
+	m.applyRuntimeAndSubscriptions()
 }
 
 func (m *AccountMenu) listUsers() {
@@ -226,12 +222,21 @@ func (m *AccountMenu) editUser() {
 
 	PrintSuccess(fmt.Sprintf("用户 %s 已更新", target.Email))
 
-	// 重新生成订阅（限速信息写入配置）
+	m.applyRuntimeAndSubscriptions()
+}
+
+func (m *AccountMenu) applyRuntimeAndSubscriptions() {
+	if err := regenerateInstalledProtocolRuntime(m.config, m.coreMgr, m.registry, m.userMgr); err != nil {
+		PrintWarning(fmt.Sprintf("用户文件已更新，但运行配置应用失败，订阅未刷新，避免客户端与服务端不一致: %v", err))
+		return
+	}
 	if m.subMgr != nil {
 		if err := m.subMgr.GenerateAll(); err != nil {
-			PrintWarning(fmt.Sprintf("重新生成订阅失败: %v", err))
+			PrintWarning(fmt.Sprintf("运行配置已应用，但订阅刷新失败，请不要复用旧订阅: %v", err))
+			return
 		}
 	}
+	PrintSuccess("运行配置和订阅已刷新")
 }
 
 // generateUUID generates a random UUID v4.

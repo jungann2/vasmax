@@ -30,12 +30,12 @@ func NewSubscriptionMenu(cfg *config.Config, subMgr *subscription.Manager, userM
 func (m *SubscriptionMenu) Show() {
 	for {
 		PrintTitle("订阅管理")
-		subDomain := m.config.Subscription.Domain
-		if subDomain == "" {
-			subDomain = m.config.TLS.Domain
-		}
+		subDomain, explicitSubDomain := subscriptionDisplayDomain(m.config)
 		if subDomain != "" {
 			PrintInfo(fmt.Sprintf("订阅域名: %s", subDomain))
+			if warning := subscriptionServiceWarning(m.config, subDomain, explicitSubDomain); warning != "" {
+				PrintWarning(warning)
+			}
 		} else {
 			PrintWarning("未配置订阅域名")
 		}
@@ -74,13 +74,18 @@ func (m *SubscriptionMenu) Show() {
 
 func (m *SubscriptionMenu) showLinks() {
 	PrintTitle("订阅链接")
-	subDomain := m.config.Subscription.Domain
-	if subDomain == "" {
-		subDomain = m.config.TLS.Domain
-	}
+	subDomain, explicitSubDomain := subscriptionDisplayDomain(m.config)
 	if subDomain == "" {
 		PrintWarning("未配置订阅域名，无法生成链接")
 		return
+	}
+	if warning := subscriptionServiceWarning(m.config, subDomain, explicitSubDomain); warning != "" {
+		PrintWarning(warning)
+		if !explicitSubDomain && !hasNginxProxyProtocol(m.config, nil) {
+			PrintInfo(fmt.Sprintf("订阅文件已生成在服务器目录: %s", m.config.Paths.Subscribe))
+			PrintInfo("Reality-only 节点请优先使用安装完成页或 Reality 菜单中的单节点链接/二维码。")
+			return
+		}
 	}
 
 	users := m.userMgr.GetAllUsers()
@@ -129,12 +134,40 @@ func (m *SubscriptionMenu) setDomain() {
 		PrintError(fmt.Sprintf("域名无效: %v", err))
 		return
 	}
+	old := m.config.Subscription
 	m.config.Subscription.Domain = domain
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.Subscription = old
 		PrintError(fmt.Sprintf("保存失败: %v", err))
 		return
 	}
 	PrintSuccess(fmt.Sprintf("订阅域名已设置为: %s", domain))
+	if warning := subscriptionServiceWarning(m.config, domain, true); warning != "" {
+		PrintWarning(warning)
+	}
+}
+
+func subscriptionDisplayDomain(cfg *config.Config) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	if domain := strings.TrimSpace(cfg.Subscription.Domain); domain != "" {
+		return domain, true
+	}
+	return strings.TrimSpace(cfg.TLS.Domain), false
+}
+
+func subscriptionServiceWarning(cfg *config.Config, subDomain string, explicitSubDomain bool) string {
+	if strings.TrimSpace(subDomain) == "" {
+		return "未配置订阅域名"
+	}
+	if hasNginxProxyProtocol(cfg, nil) {
+		return ""
+	}
+	if explicitSubDomain {
+		return "当前配置没有 Nginx 反代协议，VasmaX 不会自动创建 /s/ 订阅入口；仅当你已为该域名单独配置 HTTPS 反代/静态服务时，这些链接才可用。"
+	}
+	return "当前没有 Nginx 反代协议，TLS 域名不会自动提供 /s/ 订阅入口；Reality-only 节点请使用单节点链接/二维码，或单独设置 subscription.domain 并配置 HTTPS 订阅服务。"
 }
 
 func (m *SubscriptionMenu) remoteSubMenu() {
@@ -254,8 +287,10 @@ func (m *SubscriptionMenu) dnsSettingsMenu() {
 }
 
 func (m *SubscriptionMenu) saveSubscriptionDNSMode(mode string) {
+	old := m.config.Subscription
 	m.config.Subscription.DNSMode = mode
 	if err := m.saveSubscriptionConfig(); err != nil {
+		m.config.Subscription = old
 		PrintError(fmt.Sprintf("保存失败: %v", err))
 		return
 	}
@@ -285,8 +320,10 @@ func (m *SubscriptionMenu) setCustomDNS() bool {
 		return false
 	}
 
+	old := m.config.Subscription
 	m.config.Subscription.DNSCustom = servers
 	if err := m.saveSubscriptionConfig(); err != nil {
+		m.config.Subscription = old
 		PrintError(fmt.Sprintf("保存失败: %v", err))
 		return false
 	}
@@ -309,8 +346,10 @@ func (m *SubscriptionMenu) setSubscriptionTestURL() {
 		return
 	}
 
+	old := m.config.Subscription
 	m.config.Subscription.TestURL = testURL
 	if err := m.saveSubscriptionConfig(); err != nil {
+		m.config.Subscription = old
 		PrintError(fmt.Sprintf("保存失败: %v", err))
 		return
 	}

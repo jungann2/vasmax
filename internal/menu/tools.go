@@ -8,20 +8,23 @@ import (
 
 	"vasmax/internal/bbr"
 	"vasmax/internal/config"
+	"vasmax/internal/core"
 	"vasmax/internal/nginx"
+	"vasmax/internal/protocol"
 	"vasmax/internal/sysinfo"
 )
 
 // ToolsMenu handles miscellaneous tools.
 type ToolsMenu struct {
 	config   *config.Config
+	coreMgr  *core.Manager
 	nginxMgr *nginx.Manager
 	logger   *logrus.Logger
 }
 
 // NewToolsMenu creates a new tools menu.
-func NewToolsMenu(cfg *config.Config, nginxMgr *nginx.Manager, logger *logrus.Logger) *ToolsMenu {
-	return &ToolsMenu{config: cfg, nginxMgr: nginxMgr, logger: logger}
+func NewToolsMenu(cfg *config.Config, coreMgr *core.Manager, nginxMgr *nginx.Manager, logger *logrus.Logger) *ToolsMenu {
+	return &ToolsMenu{config: cfg, coreMgr: coreMgr, nginxMgr: nginxMgr, logger: logger}
 }
 
 // ShowCDNMenu directly shows the CDN management sub-menu.
@@ -36,9 +39,10 @@ func (m *ToolsMenu) Show() {
 		PrintOption(1, "Nginx 伪装站管理（部署假网页防止代理特征识别）")
 		PrintOption(2, "健康检查")
 		PrintOption(3, fmt.Sprintf("BBR 加速管理（当前: %s）", bbrStatus()))
+		PrintOption(4, "服务端 DNS 配置（Xray/sing-box 出站解析）")
 		PrintOptionStr("0", "返回上级菜单")
 
-		choice := ReadChoice("请选择", []string{"1", "2", "3"})
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4"})
 		switch choice {
 		case "1":
 			m.fakeSiteMenu()
@@ -46,10 +50,148 @@ func (m *ToolsMenu) Show() {
 			m.healthCheck()
 		case "3":
 			m.bbrMenu()
+		case "4":
+			m.serverDNSMenu()
 		case "0":
 			return
 		}
 	}
+}
+
+func (m *ToolsMenu) serverDNSMenu() {
+	for {
+		PrintTitle("服务端 DNS 配置")
+		PrintInfo("此处只影响服务器上的 Xray/sing-box 出站解析，不影响 Clash/sing-box 客户端订阅 DNS")
+		PrintInfo(fmt.Sprintf("当前模式: %s", m.config.ServerDNS.EffectiveMode()))
+		PrintInfo(fmt.Sprintf("当前策略: %s", m.config.ServerDNS.EffectiveStrategy()))
+		servers := m.config.ServerDNS.EffectiveServers()
+		if len(servers) > 0 {
+			PrintInfo(fmt.Sprintf("当前 DNS: %s", strings.Join(servers, ", ")))
+		} else {
+			PrintInfo("当前 DNS: system resolver")
+		}
+		PrintSeparator()
+		PrintOption(1, "system 默认（删除显式 core DNS，走系统 resolver）")
+		PrintOption(2, "Cloudflare DNS（1.1.1.1 / 1.0.0.1）")
+		PrintOption(3, "Quad9 DNS（9.9.9.9 / 149.112.112.112）")
+		PrintOption(4, "Google DNS（8.8.8.8 / 8.8.4.4，仅手动选择）")
+		PrintOption(5, "自定义 DNS IP")
+		PrintOption(6, "切换 IPv4/IPv6 策略")
+		PrintOptionStr("0", "返回")
+
+		choice := ReadChoice("请选择", []string{"1", "2", "3", "4", "5", "6"})
+		switch choice {
+		case "1":
+			m.setServerDNS(config.ServerDNSModeSystem, nil)
+		case "2":
+			m.setServerDNS(config.ServerDNSModeCloudflare, nil)
+		case "3":
+			m.setServerDNS(config.ServerDNSModeQuad9, nil)
+		case "4":
+			m.setServerDNS(config.ServerDNSModeGoogle, nil)
+		case "5":
+			m.setCustomServerDNS()
+		case "6":
+			m.serverDNSStrategyMenu()
+		case "0":
+			return
+		}
+	}
+}
+
+func (m *ToolsMenu) setServerDNS(mode string, servers []string) {
+	oldDNS := m.config.ServerDNS
+	m.config.ServerDNS.Mode = config.NormalizeServerDNSMode(mode)
+	if m.config.ServerDNS.Mode == config.ServerDNSModeCustom {
+		m.config.ServerDNS.Servers = config.NormalizeServerDNSServers(servers)
+	} else {
+		m.config.ServerDNS.Servers = nil
+	}
+	if m.config.ServerDNS.Strategy == "" {
+		m.config.ServerDNS.Strategy = "ipv4_only"
+	}
+	m.applyServerDNSConfig(oldDNS)
+}
+
+func (m *ToolsMenu) setCustomServerDNS() {
+	PrintTitle("自定义服务端 DNS")
+	PrintInfo("填写普通 DNS IP，多个用逗号或空格分隔；不要填写 http://、https://、DoH/DoT 地址")
+	input := ReadInput("DNS IP")
+	servers := config.NormalizeServerDNSServers(splitListInput(input))
+	if len(servers) == 0 {
+		PrintError("未识别到合法 DNS IP")
+		return
+	}
+	m.setServerDNS(config.ServerDNSModeCustom, servers)
+}
+
+func (m *ToolsMenu) serverDNSStrategyMenu() {
+	PrintTitle("服务端 DNS IPv4/IPv6 策略")
+	PrintOption(1, "ipv4_only（推荐：只解析/使用 IPv4，规避 IPv6 半通）")
+	PrintOption(2, "prefer_ipv4（优先 IPv4）")
+	PrintOption(3, "prefer_ipv6（优先 IPv6）")
+	PrintOption(4, "ipv6_only（只解析/使用 IPv6）")
+	PrintOptionStr("0", "返回")
+
+	choice := ReadChoice("请选择", []string{"1", "2", "3", "4"})
+	switch choice {
+	case "1":
+		oldDNS := m.config.ServerDNS
+		m.config.ServerDNS.Strategy = "ipv4_only"
+		m.applyServerDNSConfig(oldDNS)
+	case "2":
+		oldDNS := m.config.ServerDNS
+		m.config.ServerDNS.Strategy = "prefer_ipv4"
+		m.applyServerDNSConfig(oldDNS)
+	case "3":
+		oldDNS := m.config.ServerDNS
+		m.config.ServerDNS.Strategy = "prefer_ipv6"
+		m.applyServerDNSConfig(oldDNS)
+	case "4":
+		oldDNS := m.config.ServerDNS
+		m.config.ServerDNS.Strategy = "ipv6_only"
+		m.applyServerDNSConfig(oldDNS)
+	case "0":
+		return
+	}
+}
+
+func (m *ToolsMenu) applyServerDNSConfig(oldDNS config.ServerDNSConfig) {
+	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.ServerDNS = oldDNS
+		PrintError(fmt.Sprintf("保存失败: %v", err))
+		return
+	}
+
+	if !m.usesCore("xray") && !m.usesCore("singbox") {
+		PrintInfo("当前未安装需要更新的核心协议，配置会在下次安装/生成配置时生效")
+		return
+	}
+	if m.coreMgr == nil {
+		PrintWarning("核心管理器不可用，配置已保存，将在下次服务启动时生效")
+		return
+	}
+	if err := m.coreMgr.RestartAll(); err != nil {
+		m.config.ServerDNS = oldDNS
+		if saveErr := config.SaveConfig(config.DefaultConfigPath, m.config); saveErr != nil {
+			PrintWarning(fmt.Sprintf("恢复旧 DNS 配置失败，请手动检查 config.yaml: %v", saveErr))
+		} else if retryErr := m.coreMgr.RestartAll(); retryErr != nil {
+			PrintWarning(fmt.Sprintf("旧 DNS 配置已恢复，但核心恢复重启失败，请手动检查: %v", retryErr))
+		}
+		PrintWarning(fmt.Sprintf("重启核心失败，请手动检查: %v", err))
+	} else {
+		PrintSuccess("已更新 DNS/基础配置并重启当前使用的核心")
+	}
+}
+
+func (m *ToolsMenu) usesCore(coreType string) bool {
+	reg := protocol.DefaultRegistry()
+	for _, protoName := range m.config.Protocols {
+		if p, ok := reg.Get(protoName); ok && p.CoreType() == coreType {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *ToolsMenu) cdnMenu() {
@@ -74,17 +216,24 @@ func (m *ToolsMenu) cdnMenu() {
 				PrintError("CDN 地址不要带 http:// 或 https://")
 				return
 			}
+			oldCDN := m.config.CDN
 			m.config.CDN.Enabled = true
 			m.config.CDN.Address = addr
 			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				m.config.CDN = oldCDN
 				PrintError(fmt.Sprintf("保存失败: %v", err))
 			} else {
 				PrintSuccess(fmt.Sprintf("CDN 已设置: %s", addr))
 			}
 		}
 	case "2":
+		oldCDN := m.config.CDN
 		m.config.CDN.Enabled = false
-		_ = config.SaveConfig(config.DefaultConfigPath, m.config)
+		if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+			m.config.CDN = oldCDN
+			PrintError(fmt.Sprintf("保存失败: %v", err))
+			return
+		}
 		PrintSuccess("CDN 已禁用")
 	case "3":
 		presets := []string{"who.int", "icao.int", "cdn.who.int", "www.visa.com.sg"}
@@ -98,9 +247,14 @@ func (m *ToolsMenu) cdnMenu() {
 		}
 		var n int
 		if _, err := fmt.Sscanf(idx, "%d", &n); err == nil && n >= 1 && n <= len(presets) {
+			oldCDN := m.config.CDN
 			m.config.CDN.Enabled = true
 			m.config.CDN.Address = presets[n-1]
-			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
+			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				m.config.CDN = oldCDN
+				PrintError(fmt.Sprintf("保存失败: %v", err))
+				return
+			}
 			PrintSuccess(fmt.Sprintf("CDN 已设置: %s", presets[n-1]))
 		}
 	}
@@ -164,11 +318,24 @@ func (m *ToolsMenu) healthCheck() {
 
 // bbrStatus 返回当前 BBR 状态描述（用于主菜单显示）
 func bbrStatus() string {
-	cc := bbr.CurrentCC()
-	if cc == "bbr" || cc == "bbr2" || cc == "bbrplus" {
-		return Green(cc + " 已启用")
+	status := bbr.RecommendedRuntimeStatus()
+	detail := fmt.Sprintf("%s + %s", status.CC, status.DefaultQdisc)
+	if status.DeviceQdisc != "" {
+		detail += fmt.Sprintf("，网卡 %s=%s", status.DefaultInterface, status.DeviceQdisc)
 	}
-	return Yellow(cc)
+	if status.RecommendedRuntime {
+		return Green("已启用") + fmt.Sprintf("（%s）", detail)
+	}
+	if status.RecommendedSysctl {
+		if status.DeviceQdiscError != "" {
+			return Yellow(fmt.Sprintf("sysctl 已启用，网卡未确认（%s；%s）", detail, status.DeviceQdiscError))
+		}
+		return Yellow(fmt.Sprintf("sysctl 已启用，网卡未使用 fq（%s）", detail))
+	}
+	if bbr.IsBBRCC(status.CC) {
+		return Yellow(fmt.Sprintf("部分启用（%s，推荐 fq）", detail))
+	}
+	return Yellow(fmt.Sprintf("未启用（%s）", detail))
 }
 
 func (m *ToolsMenu) bbrMenu() {
@@ -176,76 +343,45 @@ func (m *ToolsMenu) bbrMenu() {
 		// ── 标题与状态 ──────────────────────────────────────────
 		PrintTitle("BBR 加速管理")
 		PrintInfo(fmt.Sprintf("内核版本  : %s", bbr.KernelVersion()))
-		cc := bbr.CurrentCC()
-		if cc == "bbr" || cc == "bbr2" || cc == "bbrplus" {
-			PrintInfo(fmt.Sprintf("拥塞控制  : %s", Green(cc+" [已启用]")))
+		status := bbr.RecommendedRuntimeStatus()
+		if status.RecommendedRuntime {
+			PrintInfo(fmt.Sprintf("推荐组合  : %s", Green("BBR + FQ [已启用]")))
+		} else if status.RecommendedSysctl {
+			PrintInfo(fmt.Sprintf("推荐组合  : %s", Yellow("sysctl 已启用，网卡 qdisc 未完整确认")))
+		} else if bbr.IsBBRCC(status.CC) {
+			PrintInfo(fmt.Sprintf("推荐组合  : %s", Yellow(fmt.Sprintf("未完整启用（当前 %s + %s）", status.CC, status.DefaultQdisc))))
 		} else {
-			PrintInfo(fmt.Sprintf("拥塞控制  : %s", Yellow(cc)))
+			PrintInfo(fmt.Sprintf("推荐组合  : %s", Yellow(fmt.Sprintf("未启用（当前 %s + %s）", status.CC, status.DefaultQdisc))))
 		}
-		PrintInfo(fmt.Sprintf("队列调度  : %s", bbr.CurrentQdisc()))
+		PrintInfo(fmt.Sprintf("拥塞控制  : %s", status.CC))
+		PrintInfo(fmt.Sprintf("队列调度  : %s", status.DefaultQdisc))
+		if status.DefaultInterface != "" {
+			deviceQdisc := status.DeviceQdisc
+			if deviceQdisc == "" {
+				deviceQdisc = "未知"
+			}
+			PrintInfo(fmt.Sprintf("默认网卡  : %s qdisc=%s", status.DefaultInterface, deviceQdisc))
+		}
+		if status.DeviceQdiscError != "" {
+			PrintWarning(fmt.Sprintf("无法读取默认网卡 qdisc: %s", status.DeviceQdiscError))
+		}
 		availableCC := strings.Join(bbr.AvailableCC(), " ")
 		if availableCC == "" {
 			availableCC = "未知"
 		}
 		PrintInfo(fmt.Sprintf("可用算法  : %s", availableCC))
 
-		// ── 内核安装类 ──────────────────────────────────────────
 		fmt.Println()
-		PrintSectionTitle("内核安装类（需要重启）")
-		PrintOption(1, "安装 BBR 原版内核")
-		PrintOption(2, "安装 BBRplus 版内核")
-		PrintOption(3, "安装 Lotserver（锐速）内核/组件")
-		PrintOption(4, "安装 BBRplus 新版内核")
-		PrintOption(5, "安装 Zen 官方版内核")
-		PrintOption(6, "安装官方 cloud 内核")
-		PrintOption(7, "安装官方稳定内核")
-		PrintOption(8, "安装官方最新内核")
-		PrintOption(9, "安装 XANMOD-main 内核")
-		PrintOption(10, "安装 XANMOD-LTS 内核")
-		PrintOption(11, "安装 XANMOD-EDGE 内核")
-		PrintOption(12, "安装 XANMOD-RT 内核")
-
-		// ── 加速启用类 ──────────────────────────────────────────
-		fmt.Println()
-		PrintSectionTitle("加速启用类（无需重启）")
-		PrintOption(13, "BBR + FQ（推荐*）")
-		PrintOption(14, "BBR + FQ_PIE（推荐）")
-		PrintOption(15, "BBR + CAKE")
-		PrintOption(16, "BBR2 + FQ（推荐）")
-		PrintOption(17, "BBR2 + FQ_PIE")
-		PrintOption(18, "BBR2 + CAKE")
-		PrintOption(19, "BBRplus + FQ")
-		PrintOption(20, "运行 Lotserver（锐速）加速脚本")
-		PrintOption(21, "编译安装 brutal 模块（高级）")
-
-		// ── 系统配置类 ──────────────────────────────────────────
-		fmt.Println()
-		PrintSectionTitle("系统配置类")
-		PrintOption(22, "开启 ECN")
-		PrintOption(23, "关闭 ECN")
-		PrintOption(24, "系统配置优化（旧方案）")
-		PrintOption(25, "系统配置优化（新方案，含更多 sysctl 调优）")
-		PrintOption(26, "禁用 IPv6")
-		PrintOption(27, "开启 IPv6")
-		PrintOption(28, "手动提交合并内核参数")
-		PrintOption(29, "手动编辑内核参数")
-
-		// ── 内核管理类 ──────────────────────────────────────────
-		fmt.Println()
-		PrintSectionTitle("内核管理类")
-		PrintOption(30, "查看已安装内核列表")
-		PrintOption(31, "删除/保留指定内核")
-		PrintOption(32, "卸载 BBR/系统优化配置（不改 IPv6）")
+		PrintSectionTitle("推荐操作")
+		PrintOption(1, "启用/重载 BBR + FQ（推荐）")
+		PrintOption(2, "重新应用默认网卡队列调度 FQ")
+		PrintOption(3, "应用系统配置优化（新方案，谨慎）")
+		PrintOption(4, "关闭 BBR 并恢复默认 cubic")
 
 		fmt.Println()
 		PrintOptionStr("0", "返回上级菜单")
 
-		choices := []string{
-			"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
-			"13", "14", "15", "16", "17", "18", "19", "20", "21",
-			"22", "23", "24", "25", "26", "27", "28", "29",
-			"30", "31", "32",
-		}
+		choices := []string{"1", "2", "3", "4"}
 		choice := ReadChoice("请选择", choices)
 		if choice == "0" {
 			return
@@ -255,230 +391,50 @@ func (m *ToolsMenu) bbrMenu() {
 }
 
 func (m *ToolsMenu) handleBBRChoice(choice string) {
-	// 选项 30（查看内核列表）是只读操作，不需要 root
-	if choice != "30" && !bbr.IsRoot() {
+	if !bbr.IsRoot() {
 		PrintError("此操作需要 root 权限")
 		return
 	}
 
-	distro, err := bbr.DetectDistro()
-	if err != nil {
-		PrintWarning(fmt.Sprintf("发行版检测失败，将尝试继续: %v", err))
-		distro = &bbr.Distro{}
-	}
-
 	switch choice {
-	// ── 内核安装类 1-12 ──────────────────────────────────────
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12":
-		targetMap := map[string]bbr.KernelTarget{
-			"1": bbr.KernelBBR, "2": bbr.KernelBBRPlus, "3": bbr.KernelLotserver,
-			"4": bbr.KernelBBRPlusNew, "5": bbr.KernelZen, "6": bbr.KernelCloud,
-			"7": bbr.KernelStable, "8": bbr.KernelLatest,
-			"9": bbr.KernelXANMODMain, "10": bbr.KernelXANMODLTS,
-			"11": bbr.KernelXANMODEdge, "12": bbr.KernelXANMODRT,
-		}
-		target := targetMap[choice]
-		label := bbr.GetKernelLabel(target)
-		PrintWarning(fmt.Sprintf("即将安装 %s，安装完成后需要重启系统", label))
-		if !Confirm("确认继续?") {
-			return
-		}
-		PrintInfo(fmt.Sprintf("正在安装 %s，请稍候...", label))
-		if err := bbr.InstallKernel(target, distro); err != nil {
-			PrintError(fmt.Sprintf("安装失败: %v", err))
-			return
-		}
-		if err := bbr.UpdateGrub(distro); err != nil {
-			PrintWarning(fmt.Sprintf("更新 grub 失败: %v", err))
-		}
-		PrintSuccess(fmt.Sprintf("%s 安装完成，请重启系统生效", label))
-		PrintInfo("重启命令: reboot")
-
-	// ── 加速启用类 13-21 ─────────────────────────────────────
-	case "13", "14", "15", "16", "17", "18", "19":
-		idx := map[string]int{"13": 0, "14": 1, "15": 2, "16": 3, "17": 4, "18": 5, "19": 6}
-		mode := bbr.CCModes[idx[choice]]
-		PrintInfo(fmt.Sprintf("正在启用 %s...", mode.Label))
+	case "1":
+		mode := bbr.RecommendedMode()
+		PrintInfo(fmt.Sprintf("正在启用/重载 %s...", mode.Label))
 		if err := bbr.SetCC(mode); err != nil {
 			PrintError(fmt.Sprintf("启用失败: %v", err))
 			return
 		}
 		PrintSuccess(fmt.Sprintf("%s 已立即应用，并会在重启后持续生效", mode.Label))
 
-	case "20":
-		PrintWarning("Lotserver 会执行外部安装脚本，可能修改内核模块和网络加速配置")
-		if !Confirm("确认继续?") {
+	case "2":
+		PrintInfo("正在重新应用默认网卡队列调度 FQ...")
+		if err := bbr.ApplyDeviceQdisc("fq"); err != nil {
+			PrintError(fmt.Sprintf("应用失败: %v", err))
 			return
 		}
-		PrintInfo("正在安装 Lotserver（锐速）加速...")
-		if err := bbr.InstallLotserverAccel(); err != nil {
-			PrintError(fmt.Sprintf("安装失败: %v", err))
+		PrintSuccess("默认网卡队列调度 FQ 已重新应用")
+
+	case "3":
+		PrintWarning("系统配置优化会修改全局 sysctl 参数；小内存或特殊用途服务器请谨慎使用")
+		if !Confirm("确认应用系统配置优化?") {
 			return
 		}
-		PrintSuccess("Lotserver 加速已安装")
-
-	case "21":
-		PrintWarning("brutal 需要编译内核模块，可能依赖当前内核头文件和编译环境")
-		if !Confirm("确认继续?") {
-			return
-		}
-		PrintInfo("正在编译安装 brutal 模块，这可能需要几分钟...")
-		if err := bbr.InstallBrutal(); err != nil {
-			PrintError(fmt.Sprintf("安装失败: %v", err))
-			return
-		}
-		PrintSuccess("brutal 模块已安装")
-
-	// ── 系统配置类 22-29 ─────────────────────────────────────
-	case "22":
-		if err := bbr.SetECN(true); err != nil {
-			PrintError(fmt.Sprintf("开启 ECN 失败: %v", err))
-		} else {
-			PrintSuccess("ECN 已开启")
-		}
-
-	case "23":
-		if err := bbr.SetECN(false); err != nil {
-			PrintError(fmt.Sprintf("关闭 ECN 失败: %v", err))
-		} else {
-			PrintSuccess("ECN 已关闭")
-		}
-
-	case "24":
-		PrintInfo("正在应用系统配置优化（旧方案）...")
-		if err := bbr.ApplyOptimize(false); err != nil {
-			PrintError(fmt.Sprintf("优化失败: %v", err))
-		} else {
-			PrintSuccess("系统配置优化（旧方案）已应用")
-		}
-
-	case "25":
 		PrintInfo("正在应用系统配置优化（新方案）...")
-		if err := bbr.ApplyOptimize(true); err != nil {
+		if err := bbr.ApplyOptimize(); err != nil {
 			PrintError(fmt.Sprintf("优化失败: %v", err))
 		} else {
 			PrintSuccess("系统配置优化（新方案）已应用")
 		}
 
-	case "26":
-		if !Confirm("确认禁用 IPv6?") {
-			return
-		}
-		if err := bbr.SetIPv6(false); err != nil {
-			PrintError(fmt.Sprintf("禁用 IPv6 失败: %v", err))
-		} else {
-			PrintSuccess("IPv6 已禁用")
-		}
-
-	case "27":
-		if err := bbr.SetIPv6(true); err != nil {
-			PrintError(fmt.Sprintf("开启 IPv6 失败: %v", err))
-		} else {
-			PrintSuccess("IPv6 已开启")
-		}
-
-	case "28":
-		PrintInfo("正在合并提交所有内核参数...")
-		if err := bbr.MergeSysctl(); err != nil {
-			PrintError(fmt.Sprintf("失败: %v", err))
-		} else {
-			PrintSuccess("所有内核参数已重新加载")
-		}
-
-	case "29":
-		if err := bbr.EditSysctlFile(); err != nil {
-			PrintError(fmt.Sprintf("打开编辑器失败: %v", err))
-		} else {
-			PrintSuccess("内核参数已保存并重新加载")
-		}
-
-	// ── 内核管理类 30-32 ─────────────────────────────────────
-	case "30":
-		kernels, err := bbr.ListInstalledKernels(distro)
-		if err != nil {
-			PrintError(fmt.Sprintf("获取内核列表失败: %v", err))
-			return
-		}
-		PrintTitle("已安装内核列表")
-		current := bbr.KernelVersion()
-		for i, k := range kernels {
-			if strings.Contains(k, current) {
-				PrintInfo(fmt.Sprintf("  %d. %s %s", i+1, k, Green("[当前运行]")))
-			} else {
-				PrintInfo(fmt.Sprintf("  %d. %s", i+1, k))
-			}
-		}
-		ReadInput("按 Enter 返回")
-
-	case "31":
-		kernels, err := bbr.ListInstalledKernels(distro)
-		if err != nil {
-			PrintError(fmt.Sprintf("获取内核列表失败: %v", err))
-			return
-		}
-		if len(kernels) == 0 {
-			PrintInfo("没有找到已安装的内核")
-			return
-		}
-		current := bbr.KernelVersion()
-		PrintTitle("选择要保留的内核（其余将被删除）")
-		for i, k := range kernels {
-			if strings.Contains(k, current) {
-				PrintInfo(fmt.Sprintf("  %d. %s %s", i+1, k, Green("[当前，不可删除]")))
-			} else {
-				PrintInfo(fmt.Sprintf("  %d. %s", i+1, k))
-			}
-		}
-		input := ReadInput("输入要保留的内核编号（多个用逗号分隔，如 1,3）")
-		if strings.TrimSpace(input) == "" {
-			PrintWarning("未输入要保留的内核编号，已取消删除")
-			return
-		}
-		keepSet := map[int]bool{}
-		for _, s := range strings.Split(input, ",") {
-			var n int
-			if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &n); err == nil && n >= 1 && n <= len(kernels) {
-				keepSet[n-1] = true
-			}
-		}
-		// 当前内核强制保留
-		for i, k := range kernels {
-			if strings.Contains(k, current) {
-				keepSet[i] = true
-			}
-		}
-		var toDelete []string
-		for i, k := range kernels {
-			if !keepSet[i] {
-				toDelete = append(toDelete, k)
-			}
-		}
-		if len(toDelete) == 0 {
-			PrintInfo("没有需要删除的内核")
-			return
-		}
-		PrintWarning(fmt.Sprintf("将删除以下内核: %s", strings.Join(toDelete, ", ")))
-		if !Confirm("确认删除?") {
-			return
-		}
-		if err := bbr.DeleteKernels(toDelete, distro); err != nil {
-			PrintError(fmt.Sprintf("删除失败: %v", err))
-		} else {
-			if err := bbr.UpdateGrub(distro); err != nil {
-				PrintWarning(fmt.Sprintf("更新 grub 失败: %v", err))
-			}
-			PrintSuccess("指定内核已删除")
-		}
-
-	case "32":
-		PrintWarning("此操作将删除 vasmax BBR/系统优化配置，恢复默认 cubic；不会修改 IPv6 开关")
-		if !Confirm("确认卸载 BBR/系统优化配置?") {
+	case "4":
+		PrintWarning("此操作将删除 vasmax BBR/系统优化配置，关闭 BBR 并恢复默认 cubic；不会修改 IPv6 开关")
+		if !Confirm("确认关闭 BBR 并恢复默认 cubic?") {
 			return
 		}
 		if err := bbr.DisableAll(); err != nil {
-			PrintError(fmt.Sprintf("卸载失败: %v", err))
+			PrintError(fmt.Sprintf("关闭失败: %v", err))
 		} else {
-			PrintSuccess("全部加速配置已卸载，已恢复 cubic")
+			PrintSuccess("BBR 已关闭，全部加速配置已卸载，已恢复 cubic")
 		}
 	}
 }

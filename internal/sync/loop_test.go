@@ -1,12 +1,14 @@
 package sync
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"vasmax/internal/api"
 	"vasmax/internal/config"
+	"vasmax/internal/protocol"
 	"vasmax/internal/security"
 	"vasmax/internal/user"
 
@@ -230,4 +232,101 @@ func TestApplyConfigWritesRollsBackOnFailure(t *testing.T) {
 	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
 		t.Fatalf("expected new file to be removed after rollback, got %v", err)
 	}
+}
+
+func TestRegenerateConfigsPreservesHysteria2SpeedWithoutLegacyPort(t *testing.T) {
+	confDir := t.TempDir()
+	l := &Loop{
+		registry: protocol.DefaultRegistry(),
+		config: &config.Config{
+			Protocols: []string{"hysteria2"},
+			Paths:     config.PathsConfig{SingBoxConf: confDir},
+			TLS:       config.TLSConfig{CertFile: "/tmp/cert.pem", KeyFile: "/tmp/key.pem"},
+			Hysteria2: config.Hysteria2Config{DownMbps: 200, UpMbps: 50},
+		},
+		logger: logrus.New(),
+	}
+
+	err := l.regenerateConfigs([]api.User{{ID: 1, UUID: "550e8400-e29b-41d4-a716-446655440001"}})
+	if err != nil {
+		t.Fatalf("regenerateConfigs failed: %v", err)
+	}
+
+	inbound := readGeneratedSingBoxInbound(t, filepath.Join(confDir, "10_hysteria2_inbounds.json"))
+	if inbound["down_mbps"] != float64(200) || inbound["up_mbps"] != float64(50) {
+		t.Fatalf("expected hysteria2 speed settings, got %#v", inbound)
+	}
+}
+
+func TestRegenerateConfigsPreservesTuicCongestionWithoutLegacyPort(t *testing.T) {
+	confDir := t.TempDir()
+	l := &Loop{
+		registry: protocol.DefaultRegistry(),
+		config: &config.Config{
+			Protocols: []string{"tuic"},
+			Paths:     config.PathsConfig{SingBoxConf: confDir},
+			TLS:       config.TLSConfig{CertFile: "/tmp/cert.pem", KeyFile: "/tmp/key.pem"},
+			Tuic:      config.TuicConfig{CongestionControl: "cubic"},
+		},
+		logger: logrus.New(),
+	}
+
+	err := l.regenerateConfigs([]api.User{{ID: 1, UUID: "550e8400-e29b-41d4-a716-446655440001"}})
+	if err != nil {
+		t.Fatalf("regenerateConfigs failed: %v", err)
+	}
+
+	inbound := readGeneratedSingBoxInbound(t, filepath.Join(confDir, "10_tuic_inbounds.json"))
+	if inbound["congestion_control"] != "cubic" {
+		t.Fatalf("expected tuic congestion_control=cubic, got %#v", inbound["congestion_control"])
+	}
+}
+
+func TestRegenerateConfigsFallsBackToTLSDomain(t *testing.T) {
+	confDir := t.TempDir()
+	l := &Loop{
+		registry: protocol.DefaultRegistry(),
+		config: &config.Config{
+			Protocols: []string{"anytls"},
+			Paths:     config.PathsConfig{SingBoxConf: confDir},
+			TLS: config.TLSConfig{
+				Domain:   "node.example.com",
+				CertFile: "/tmp/cert.pem",
+				KeyFile:  "/tmp/key.pem",
+			},
+		},
+		logger: logrus.New(),
+	}
+
+	err := l.regenerateConfigs([]api.User{{ID: 1, UUID: "550e8400-e29b-41d4-a716-446655440001"}})
+	if err != nil {
+		t.Fatalf("regenerateConfigs failed: %v", err)
+	}
+
+	inbound := readGeneratedSingBoxInbound(t, filepath.Join(confDir, "10_anytls_inbounds.json"))
+	tls, ok := inbound["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected AnyTLS tls settings, got %#v", inbound["tls"])
+	}
+	if tls["server_name"] != "node.example.com" {
+		t.Fatalf("expected AnyTLS server_name fallback to tls.domain, got %#v", tls["server_name"])
+	}
+}
+
+func readGeneratedSingBoxInbound(t *testing.T, path string) map[string]interface{} {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wrapper struct {
+		Inbounds []map[string]interface{} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		t.Fatal(err)
+	}
+	if len(wrapper.Inbounds) != 1 {
+		t.Fatalf("expected one inbound, got %d", len(wrapper.Inbounds))
+	}
+	return wrapper.Inbounds[0]
 }

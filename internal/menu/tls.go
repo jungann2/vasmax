@@ -200,12 +200,16 @@ func (m *TLSMenu) issueCert() {
 
 	// 安装证书到 TLS 目录
 	tlsDir := config.DefaultTLSDir
+	if err := os.MkdirAll(tlsDir, 0755); err != nil {
+		PrintError(fmt.Sprintf("创建 TLS 目录失败: %v", err))
+		return
+	}
 	installArgs := []string{
 		"--install-cert", "-d", domain,
 		"--cert-file", filepath.Join(tlsDir, domain+".crt"),
 		"--key-file", filepath.Join(tlsDir, domain+".key"),
 		"--fullchain-file", filepath.Join(tlsDir, domain+".fullchain.crt"),
-		"--reloadcmd", "systemctl restart VasmaX",
+		"--reloadcmd", "true",
 	}
 	installCmd := exec.Command(acmePath, installArgs...)
 	installCmd.Stdout = os.Stdout
@@ -222,12 +226,15 @@ func (m *TLSMenu) issueCert() {
 	}
 
 	// 更新配置
+	oldTLS := m.config.TLS
 	m.config.TLS.Domain = domain
 	m.config.TLS.CertFile = filepath.Join(tlsDir, domain+".fullchain.crt")
 	m.config.TLS.KeyFile = keyPath
 	m.config.TLS.Provider = caServer
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.TLS = oldTLS
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
+		return
 	}
 
 	PrintSuccess(fmt.Sprintf("证书已申请并安装到 %s", tlsDir))
@@ -237,7 +244,7 @@ func (m *TLSMenu) issueCert() {
 	PrintInfo(fmt.Sprintf("  完整链证书: %s", filepath.Join(tlsDir, domain+".fullchain.crt")))
 	PrintInfo(fmt.Sprintf("  私钥文件:   %s", keyPath))
 	fmt.Println()
-	PrintInfo("acme.sh 已配置自动续期（cron job），续期后自动重启服务")
+	PrintInfo("acme.sh 已配置自动续期（cron job）；当前不会在证书安装阶段自动重启 VasmaX，请在证书变更后重启核心")
 }
 
 func (m *TLSMenu) renewCert() {
@@ -321,9 +328,12 @@ func (m *TLSMenu) switchProvider() {
 		return
 	}
 
+	oldProvider := m.config.TLS.Provider
 	m.config.TLS.Provider = provider
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.TLS.Provider = oldProvider
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
+		return
 	}
 
 	PrintSuccess(fmt.Sprintf("已切换到 %s", m.providerName()))
@@ -350,10 +360,15 @@ func (m *TLSMenu) detectPanelCert() {
 	if fileExists(btCert) && fileExists(btKey) {
 		PrintSuccess(fmt.Sprintf("检测到宝塔面板证书: %s", btCert))
 		if Confirm("是否使用宝塔面板证书?") {
+			oldTLS := m.config.TLS
 			m.config.TLS.CertFile = btCert
 			m.config.TLS.KeyFile = btKey
 			m.config.TLS.Domain = domain
-			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
+			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				m.config.TLS = oldTLS
+				PrintError(fmt.Sprintf("保存配置失败: %v", err))
+				return
+			}
 			PrintSuccess("已配置使用宝塔面板证书")
 			return
 		}
@@ -365,20 +380,36 @@ func (m *TLSMenu) detectPanelCert() {
 	if fileExists(oneCert) && fileExists(oneKey) {
 		PrintSuccess(fmt.Sprintf("检测到 1Panel 证书: %s", oneCert))
 		if Confirm("是否使用 1Panel 证书?") {
+			oldTLS := m.config.TLS
 			m.config.TLS.CertFile = oneCert
 			m.config.TLS.KeyFile = oneKey
 			m.config.TLS.Domain = domain
-			_ = config.SaveConfig(config.DefaultConfigPath, m.config)
+			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				m.config.TLS = oldTLS
+				PrintError(fmt.Sprintf("保存配置失败: %v", err))
+				return
+			}
 			PrintSuccess("已配置使用 1Panel 证书")
 			return
 		}
 	}
 
 	// 检测默认路径
-	defCert := filepath.Join(config.DefaultTLSDir, domain+".crt")
-	defKey := filepath.Join(config.DefaultTLSDir, domain+".key")
+	defCert, defKey := defaultTLSCertPair(domain)
 	if fileExists(defCert) && fileExists(defKey) {
 		PrintSuccess(fmt.Sprintf("检测到默认路径证书: %s", defCert))
+		if Confirm("是否使用默认路径证书?") {
+			oldTLS := m.config.TLS
+			m.config.TLS.CertFile = defCert
+			m.config.TLS.KeyFile = defKey
+			m.config.TLS.Domain = domain
+			if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+				m.config.TLS = oldTLS
+				PrintError(fmt.Sprintf("保存配置失败: %v", err))
+				return
+			}
+			PrintSuccess("已配置使用默认路径证书")
+		}
 		return
 	}
 
@@ -421,6 +452,19 @@ func (m *TLSMenu) providerName() string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func defaultTLSCertPair(domain string) (string, string) {
+	return defaultTLSCertPairInDir(config.DefaultTLSDir, domain)
+}
+
+func defaultTLSCertPairInDir(dir, domain string) (string, string) {
+	fullchain := filepath.Join(dir, domain+".fullchain.crt")
+	key := filepath.Join(dir, domain+".key")
+	if fileExists(fullchain) {
+		return fullchain, key
+	}
+	return filepath.Join(dir, domain+".crt"), key
 }
 
 // currentMinVersion 返回当前最低 TLS 版本（显示用）
@@ -493,9 +537,12 @@ func (m *TLSMenu) setTLSVersion() {
 		}
 	}
 
+	oldMin, oldMax := m.config.TLS.MinVersion, m.config.TLS.MaxVersion
 	m.config.TLS.MinVersion = minVer
 	m.config.TLS.MaxVersion = maxVer
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		m.config.TLS.MinVersion = oldMin
+		m.config.TLS.MaxVersion = oldMax
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}

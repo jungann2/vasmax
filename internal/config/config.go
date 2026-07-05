@@ -33,6 +33,7 @@ type Config struct {
 	CoreType          string             `yaml:"core_type"`
 	CDN               CDNConfig          `yaml:"cdn"`
 	Subscription      SubscriptionConfig `yaml:"subscription"`
+	ServerDNS         ServerDNSConfig    `yaml:"server_dns"`
 	Hysteria2         Hysteria2Config    `yaml:"hysteria2"`
 	Tuic              TuicConfig         `yaml:"tuic"`
 	Reality           RealityConfig      `yaml:"reality"`
@@ -79,12 +80,20 @@ type CDNConfig struct {
 type SubscriptionConfig struct {
 	Salt        string   `yaml:"salt"`
 	Domain      string   `yaml:"domain"`
+	ServerIP    string   `yaml:"server_ip"`    // 无域名订阅连接地址；留空则自动探测公网 IP
 	DNSMode     string   `yaml:"dns_mode"`     // auto/cn/global/privacy/custom
 	DNSDomestic []string `yaml:"dns_domestic"` // 国内 DoH/DNS，auto/cn 模式使用
 	DNSGlobal   []string `yaml:"dns_global"`   // 国外 DoH/DNS，auto/global 模式使用
 	DNSPrivacy  []string `yaml:"dns_privacy"`  // 隐私优先 DoH/DNS，privacy 模式使用
 	DNSCustom   []string `yaml:"dns_custom"`   // custom 模式使用
 	TestURL     string   `yaml:"test_url"`     // 订阅自动测速 URL
+}
+
+// ServerDNSConfig controls optional explicit DNS for server-side Xray/sing-box.
+type ServerDNSConfig struct {
+	Mode     string   `yaml:"mode"`     // system/cloudflare/quad9/google/custom
+	Servers  []string `yaml:"servers"`  // custom 模式使用，普通 DNS IP
+	Strategy string   `yaml:"strategy"` // ipv4_only/prefer_ipv4/prefer_ipv6/ipv6_only
 }
 
 // Hysteria2Config holds Hysteria2 protocol settings.
@@ -104,12 +113,21 @@ type TuicConfig struct {
 
 // RealityConfig holds Reality protocol settings.
 type RealityConfig struct {
-	PrivateKey string `yaml:"private_key"`
-	PublicKey  string `yaml:"public_key"`
-	ShortID    string `yaml:"short_id"`
-	Dest       string `yaml:"dest"`
+	PrivateKey string          `yaml:"private_key"`
+	PublicKey  string          `yaml:"public_key"`
+	ShortID    string          `yaml:"short_id"`
+	Dest       string          `yaml:"dest"`
+	ServerName string          `yaml:"server_name"`
+	Port       int             `yaml:"port"`    // Reality 监听端口，默认 443，阿里云等用 8443
+	Targets    []RealityTarget `yaml:"targets"` // Reality 多伪装目标池（每个目标独立端口）
+}
+
+type RealityTarget struct {
+	Name       string `yaml:"name"`
 	ServerName string `yaml:"server_name"`
-	Port       int    `yaml:"port"` // Reality 监听端口，默认 443，阿里云等用 8443
+	Dest       string `yaml:"dest"`
+	Port       int    `yaml:"port"`
+	Disabled   bool   `yaml:"disabled,omitempty"`
 }
 
 // PathsConfig holds file system path settings for various components.
@@ -160,6 +178,87 @@ func (r *RealityConfig) EffectivePort() int {
 		return r.Port
 	}
 	return 443
+}
+
+func (r *RealityConfig) EffectiveTargets(basePort int) []RealityTarget {
+	if basePort <= 0 {
+		basePort = r.EffectivePort()
+	}
+	if len(r.Targets) == 0 {
+		serverName := r.ServerName
+		if serverName == "" {
+			serverName = security.DefaultRealityServerName
+		}
+		dest := r.Dest
+		if dest == "" {
+			dest = serverName + ":443"
+		}
+		return []RealityTarget{{
+			Name:       RealityTargetName(serverName),
+			ServerName: serverName,
+			Dest:       dest,
+			Port:       basePort,
+		}}
+	}
+	targets := make([]RealityTarget, 0, len(r.Targets))
+	nextPort := basePort
+	for _, t := range r.Targets {
+		if t.Disabled {
+			continue
+		}
+		if t.ServerName == "" {
+			t.ServerName = strings.Split(t.Dest, ":")[0]
+		}
+		if t.ServerName == "" {
+			continue
+		}
+		if t.Dest == "" {
+			t.Dest = t.ServerName + ":443"
+		}
+		if t.Name == "" {
+			t.Name = RealityTargetName(t.ServerName)
+		}
+		if t.Port <= 0 {
+			t.Port = nextPort
+		}
+		nextPort = t.Port + 1
+		targets = append(targets, t)
+	}
+	return targets
+}
+
+func (r *RealityConfig) EnsureDefaultTargets(basePort int) bool {
+	if len(r.Targets) > 0 {
+		return false
+	}
+	if basePort <= 0 {
+		basePort = r.EffectivePort()
+	}
+	names := security.DefaultRealityTargetServerNames()
+	r.Targets = make([]RealityTarget, 0, len(names))
+	for i, serverName := range names {
+		r.Targets = append(r.Targets, RealityTarget{
+			Name:       RealityTargetName(serverName),
+			ServerName: serverName,
+			Dest:       serverName + ":443",
+			Port:       basePort + i,
+		})
+	}
+	r.ServerName = r.Targets[0].ServerName
+	r.Dest = r.Targets[0].Dest
+	r.Port = r.Targets[0].Port
+	return true
+}
+
+func RealityTargetName(serverName string) string {
+	host := strings.TrimPrefix(strings.ToLower(serverName), "www.")
+	host = strings.Split(host, ":")[0]
+	host = strings.Split(host, ".")[0]
+	host = strings.ReplaceAll(host, "_", "-")
+	if host == "" {
+		return "target"
+	}
+	return host
 }
 
 // ALPNList 根据 ALPN 配置返回当前 ALPN 列表（供协议生成时使用）
@@ -213,6 +312,12 @@ func (c *Config) setDefaults() {
 	if c.Subscription.TestURL == "" {
 		c.Subscription.TestURL = "https://www.gstatic.com/generate_204"
 	}
+	if c.ServerDNS.Mode == "" {
+		c.ServerDNS.Mode = "system"
+	}
+	if c.ServerDNS.Strategy == "" {
+		c.ServerDNS.Strategy = "ipv4_only"
+	}
 	if c.Nginx.LongConnectionTimeout == "" {
 		c.Nginx.LongConnectionTimeout = "86400s"
 	}
@@ -248,6 +353,20 @@ func (c *Config) GetProtocolDomain(protoName string) string {
 		return d
 	}
 	return c.TLS.Domain
+}
+
+// EffectiveProtocolMode returns the install mode for a protocol, preserving
+// legacy behavior for configs written before protocol_modes existed.
+func EffectiveProtocolMode(c *Config, protoName string) string {
+	if c != nil && c.ProtocolModes != nil {
+		if mode := strings.TrimSpace(c.ProtocolModes[protoName]); mode != "" {
+			return mode
+		}
+	}
+	if strings.Contains(protoName, "reality") {
+		return "nodomain"
+	}
+	return "domain"
 }
 
 // LoadConfig reads a YAML configuration file from path, unmarshals it into

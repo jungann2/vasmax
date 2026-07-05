@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 
@@ -120,6 +121,28 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// 10.5 Validate per-protocol install metadata.
+	for protoName, mode := range c.ProtocolModes {
+		switch mode {
+		case "domain", "nodomain", "":
+		default:
+			errs = append(errs, fmt.Sprintf("protocol_modes[%s]: must be domain or nodomain, got %q", protoName, mode))
+		}
+	}
+	for protoName, port := range c.ProtocolPorts {
+		if err := security.ValidatePort(port); err != nil {
+			errs = append(errs, fmt.Sprintf("protocol_ports[%s]: %v", protoName, err))
+		}
+	}
+	for protoName, domain := range c.ProtocolDomains {
+		if strings.TrimSpace(domain) == "" {
+			continue
+		}
+		if err := security.ValidateDomain(domain); err != nil {
+			errs = append(errs, fmt.Sprintf("protocol_domains[%s]: %v", protoName, err))
+		}
+	}
+
 	// 11. Validate TLS version range if set.
 	if c.TLS.MinVersion != "" || c.TLS.MaxVersion != "" {
 		tlsVersionOrder := map[string]int{"1.0": 0, "1.1": 1, "1.2": 2, "1.3": 3}
@@ -154,13 +177,70 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("subscription.test_url: %v", err))
 		}
 	}
+	if c.Subscription.ServerIP != "" && net.ParseIP(strings.TrimSpace(c.Subscription.ServerIP)) == nil {
+		errs = append(errs, fmt.Sprintf("subscription.server_ip: must be a valid IP address, got %q", c.Subscription.ServerIP))
+	}
 
-	// 13. Validate generated Nginx timeout if set.
+	// 12.5 Validate Reality settings if present.
+	if c.Reality.Port != 0 {
+		if err := security.ValidatePort(c.Reality.Port); err != nil {
+			errs = append(errs, fmt.Sprintf("reality.port: %v", err))
+		}
+	}
+	if c.Reality.ServerName != "" {
+		if err := security.ValidateDomain(c.Reality.ServerName); err != nil {
+			errs = append(errs, fmt.Sprintf("reality.server_name: %v", err))
+		}
+	}
+	if c.Reality.Dest != "" {
+		if _, _, err := security.NormalizeRealityDest(c.Reality.Dest); err != nil {
+			errs = append(errs, fmt.Sprintf("reality.dest: %v", err))
+		}
+	}
+	for i, target := range c.Reality.Targets {
+		if target.ServerName != "" {
+			if err := security.ValidateDomain(target.ServerName); err != nil {
+				errs = append(errs, fmt.Sprintf("reality.targets[%d].server_name: %v", i, err))
+			}
+		}
+		if target.Dest != "" {
+			if _, _, err := security.NormalizeRealityDest(target.Dest); err != nil {
+				errs = append(errs, fmt.Sprintf("reality.targets[%d].dest: %v", i, err))
+			}
+		}
+		if target.Port != 0 {
+			if err := security.ValidatePort(target.Port); err != nil {
+				errs = append(errs, fmt.Sprintf("reality.targets[%d].port: %v", i, err))
+			}
+		}
+	}
+
+	// 13. Validate server-side core DNS settings if set.
+	if c.ServerDNS.Mode != "" {
+		validServerDNSModes := map[string]bool{
+			ServerDNSModeSystem: true, ServerDNSModeCloudflare: true, ServerDNSModeQuad9: true,
+			ServerDNSModeGoogle: true, ServerDNSModeCustom: true,
+		}
+		if !validServerDNSModes[c.ServerDNS.Mode] {
+			errs = append(errs, fmt.Sprintf("server_dns.mode: must be one of system/cloudflare/quad9/google/custom, got %q", c.ServerDNS.Mode))
+		}
+		if c.ServerDNS.Mode == ServerDNSModeCustom && len(NormalizeServerDNSServers(c.ServerDNS.Servers)) == 0 {
+			errs = append(errs, "server_dns.servers: custom mode requires at least one plain DNS IP")
+		}
+	}
+	if c.ServerDNS.Strategy != "" {
+		validServerDNSStrategies := map[string]bool{"ipv4_only": true, "prefer_ipv4": true, "prefer_ipv6": true, "ipv6_only": true}
+		if !validServerDNSStrategies[c.ServerDNS.Strategy] {
+			errs = append(errs, fmt.Sprintf("server_dns.strategy: must be one of ipv4_only/prefer_ipv4/prefer_ipv6/ipv6_only, got %q", c.ServerDNS.Strategy))
+		}
+	}
+
+	// 14. Validate generated Nginx timeout if set.
 	if c.Nginx.LongConnectionTimeout != "" && !nginxDurationRegex.MatchString(c.Nginx.LongConnectionTimeout) {
 		errs = append(errs, fmt.Sprintf("nginx.long_connection_timeout: must be a positive duration with unit ms/s/m/h/d, got %q", c.Nginx.LongConnectionTimeout))
 	}
 
-	// 14. Validate managed-mode sync safety settings.
+	// 15. Validate managed-mode sync safety settings.
 	if c.Sync.EmptyUsersApplyThreshold < -1 {
 		errs = append(errs, fmt.Sprintf("sync.empty_users_apply_threshold: must be -1 or >= 0, got %d", c.Sync.EmptyUsersApplyThreshold))
 	}
@@ -171,7 +251,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("sync.min_push_interval_seconds: must be >= 0, got %d", c.Sync.MinPushIntervalSeconds))
 	}
 
-	// 15. Validate low-level connection keepalive settings.
+	// 16. Validate low-level connection keepalive settings.
 	if c.Connection.KeepAliveMode != "" {
 		validKeepAliveModes := map[string]bool{"auto": true, "off": true}
 		if !validKeepAliveModes[c.Connection.KeepAliveMode] {

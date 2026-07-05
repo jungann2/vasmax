@@ -3,6 +3,7 @@ package route
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,14 @@ type Manager struct {
 	mu             sync.Mutex
 }
 
+type fileSnapshot struct {
+	path    string
+	exists  bool
+	data    []byte
+	mode    os.FileMode
+	skipped bool
+}
+
 // NewManager creates a new route manager.
 func NewManager(xrayConfDir, singboxConfDir string, logger *logrus.Logger) *Manager {
 	return &Manager{
@@ -54,14 +63,22 @@ func (m *Manager) AddRule(rule *RouteRule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	snapshot, err := m.snapshotRoutingFiles()
+	if err != nil {
+		return err
+	}
 	if err := m.addXrayRule(rule); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to add xray route rule: %w", err)
 	}
 	if err := m.addSingboxRule(rule); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to add singbox route rule: %w", err)
 	}
 
-	m.logger.Infof("added route rule: type=%s outbound=%s", rule.Type, rule.Outbound)
+	if m.logger != nil {
+		m.logger.Infof("added route rule: type=%s outbound=%s", rule.Type, rule.Outbound)
+	}
 	return nil
 }
 
@@ -70,14 +87,22 @@ func (m *Manager) RemoveRule(ruleType string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	snapshot, err := m.snapshotRoutingFiles()
+	if err != nil {
+		return err
+	}
 	if err := m.removeXrayRule(ruleType); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to remove xray route rule: %w", err)
 	}
 	if err := m.removeSingboxRule(ruleType); err != nil {
+		_ = restoreFileSnapshots(snapshot)
 		return fmt.Errorf("failed to remove singbox route rule: %w", err)
 	}
 
-	m.logger.Infof("removed route rule: type=%s", ruleType)
+	if m.logger != nil {
+		m.logger.Infof("removed route rule: type=%s", ruleType)
+	}
 	return nil
 }
 
@@ -113,6 +138,79 @@ func (m *Manager) loadCustomRules() ([]RouteRule, error) {
 // saveCustomRules persists custom rules to file.
 func (m *Manager) saveCustomRules(rules []RouteRule) error {
 	return security.AtomicWriteJSON(m.customRulesPath(), rules, 0644)
+}
+
+func (m *Manager) snapshotRoutingFiles(extraPaths ...string) ([]fileSnapshot, error) {
+	paths := []string{m.xrayRoutePath(), m.singboxRoutePath(), m.customRulesPath()}
+	paths = append(paths, extraPaths...)
+	return snapshotFiles(paths...)
+}
+
+func snapshotFiles(paths ...string) ([]fileSnapshot, error) {
+	seen := make(map[string]struct{}, len(paths))
+	snapshots := make([]fileSnapshot, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		clean := filepath.Clean(p)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+
+		info, err := os.Stat(clean)
+		if err != nil {
+			if os.IsNotExist(err) {
+				snapshots = append(snapshots, fileSnapshot{path: clean})
+				continue
+			}
+			return nil, fmt.Errorf("snapshot %s: %w", clean, err)
+		}
+		if info.IsDir() {
+			snapshots = append(snapshots, fileSnapshot{path: clean, exists: true, skipped: true, mode: info.Mode().Perm()})
+			continue
+		}
+		data, err := os.ReadFile(clean)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot %s: %w", clean, err)
+		}
+		snapshots = append(snapshots, fileSnapshot{
+			path:   clean,
+			exists: true,
+			data:   data,
+			mode:   info.Mode().Perm(),
+		})
+	}
+	return snapshots, nil
+}
+
+func restoreFileSnapshots(snapshots []fileSnapshot) error {
+	var errs []error
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		s := snapshots[i]
+		if s.path == "" || s.skipped {
+			continue
+		}
+		if !s.exists {
+			if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("remove new file %s: %w", s.path, err))
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+			errs = append(errs, fmt.Errorf("restore mkdir %s: %w", s.path, err))
+			continue
+		}
+		mode := s.mode
+		if mode == 0 {
+			mode = 0644
+		}
+		if err := os.WriteFile(s.path, s.data, mode); err != nil {
+			errs = append(errs, fmt.Errorf("restore %s: %w", s.path, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // addXrayRule adds a rule to the Xray routing config.
@@ -260,8 +358,12 @@ func buildXrayRule(rule *RouteRule) map[string]interface{} {
 
 // buildSingboxRule converts a RouteRule to a sing-box route rule map.
 func buildSingboxRule(rule *RouteRule) map[string]interface{} {
+	outbound := rule.Outbound
+	if outbound == "blocked" {
+		outbound = "block"
+	}
 	r := map[string]interface{}{
-		"outbound": rule.Outbound,
+		"outbound": outbound,
 		"tag":      "custom_" + rule.Type,
 	}
 	if len(rule.Domains) > 0 {

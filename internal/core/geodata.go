@@ -14,6 +14,11 @@ const (
 	geoSiteURL = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
 )
 
+var (
+	geoDataCronPath = "/etc/cron.d/VasmaX-geodata"
+	geoDataLogDir   = "/var/log/vasmax"
+)
+
 // UpdateGeoData 从 GitHub Releases 下载 GeoIP/GeoSite 数据
 func (m *Manager) UpdateGeoData(ctx context.Context) error {
 	m.mu.Lock()
@@ -44,20 +49,23 @@ func (m *Manager) UpdateGeoData(ctx context.Context) error {
 	}
 
 	if err := downloader.DownloadAll(ctx, tasks, func(name string, pct int) {
-		m.logger.WithField("file", name).Info("GeoData 下载完成")
+		if m.logger != nil {
+			m.logger.WithField("file", name).Info("GeoData 下载完成")
+		}
 	}); err != nil {
 		return fmt.Errorf("更新 GeoData 失败: %w", err)
 	}
 
 	// 重载核心
-	if fileExists(m.xray.BinaryPath) {
+	needed := m.neededCores()
+	if needed["xray"] {
 		if err := m.ReloadXray(); err != nil {
-			m.logger.WithError(err).Warn("重载 Xray 失败")
+			m.logWarn(err, "重载 Xray 失败")
 		}
 	}
-	if fileExists(m.singbox.BinaryPath) {
+	if needed["singbox"] {
 		if err := m.RestartSingBox(); err != nil {
-			m.logger.WithError(err).Warn("重启 sing-box 失败")
+			m.logWarn(err, "重启 sing-box 失败")
 		}
 	}
 
@@ -66,6 +74,12 @@ func (m *Manager) UpdateGeoData(ctx context.Context) error {
 
 // InstallGeoDataCron 安装 GeoData 自动更新定时任务
 func InstallGeoDataCron() error {
-	cronLine := "0 4 * * * /usr/local/bin/VasmaX --update-geodata\n"
-	return os.WriteFile("/etc/cron.d/VasmaX-geodata", []byte(cronLine), 0644)
+	if err := os.MkdirAll(geoDataLogDir, 0755); err != nil {
+		return fmt.Errorf("create vasmax log dir: %w", err)
+	}
+	cronLine := `SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 4 * * * root /usr/local/bin/VasmaX -c /etc/vasmax/config.yaml --update-geodata >> /var/log/vasmax/geodata-update.log 2>&1
+`
+	return os.WriteFile(geoDataCronPath, []byte(cronLine), 0644)
 }

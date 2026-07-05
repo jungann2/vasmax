@@ -43,6 +43,7 @@ func main() {
 	showMenu := flag.Bool("menu", false, "显示交互式菜单")
 	runHealth := flag.Bool("health", false, "运行健康检查")
 	writeConfigReference := flag.Bool("write-config-reference", false, "写入配置参考文件")
+	updateGeoData := flag.Bool("update-geodata", false, "更新 Xray/sing-box GeoData")
 	flag.Parse()
 
 	if *showVersion {
@@ -84,6 +85,17 @@ func main() {
 	defer logCleanup()
 	if err := internalConfig.WriteReferenceConfig(*configPath); err != nil {
 		logger.WithError(err).Warn("写入配置参考文件失败")
+	}
+
+	if *updateGeoData {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err := core.NewManager(cfg, logger).UpdateGeoData(ctx); err != nil {
+			logger.WithError(err).Error("GeoData 更新失败")
+			os.Exit(1)
+		}
+		logger.Info("GeoData 更新完成")
+		return
 	}
 
 	// 设置语言
@@ -132,9 +144,17 @@ func main() {
 
 	// 初始化各模块
 	userMgr := user.NewManager()
+	if err := userMgr.RecoverFromXrayConfigs(cfg.Paths.XrayConf); err != nil {
+		logger.WithError(err).Debug("恢复 Xray 用户失败")
+	}
 	trafficCtr := traffic.NewCounter()
 	aliveTrk := alive.NewTracker(cfg.NodeID)
 	coreMgr := core.NewManager(cfg, logger)
+	reg := protocol.DefaultRegistry()
+	subMgr, err := subscription.NewManager(cfg, reg, userMgr, logger)
+	if err != nil {
+		logger.WithError(err).Warn("初始化订阅管理器失败，启动时不会自动刷新订阅")
+	}
 
 	// 加载持久化流量数据
 	trafficFile := filepath.Join(cfg.Paths.Cache, "traffic.json")
@@ -179,7 +199,7 @@ func main() {
 			if nodeCfg.BaseConfig.PushInterval > 0 {
 				pushInterval = time.Duration(nodeCfg.BaseConfig.PushInterval) * time.Second
 			}
-			if applyManagedNodeConfig(cfg, nodeCfg, protocol.DefaultRegistry(), logger) {
+			if applyManagedNodeConfig(cfg, nodeCfg, reg, logger) {
 				nodeConfigChanged = true
 				if err := internalConfig.SaveConfig(*configPath, cfg); err != nil {
 					logger.WithError(err).Warn("保存 Xboard 下发配置失败")
@@ -189,7 +209,7 @@ func main() {
 		pullInterval = clampManagedInterval("pull_interval", pullInterval, cfg.Sync.MinPullIntervalSeconds, logger)
 		pushInterval = clampManagedInterval("push_interval", pushInterval, cfg.Sync.MinPushIntervalSeconds, logger)
 
-		syncLoop = internalSync.NewLoop(apiClient, userMgr, trafficCtr, aliveTrk, coreMgr, protocol.DefaultRegistry(), cfg, nodeCfg, logger, auditLog)
+		syncLoop = internalSync.NewLoop(apiClient, userMgr, trafficCtr, aliveTrk, coreMgr, reg, cfg, nodeCfg, logger, auditLog)
 		if nodeConfigChanged {
 			syncLoop.MarkConfigDirty("xboard node config changed")
 			if err := syncLoop.RunOnce(ctx); err != nil {
@@ -198,10 +218,24 @@ func main() {
 		}
 	}
 
+	if changed, err := menuPkg.SyncRealityRuntime(nil, cfg); err != nil {
+		logger.WithError(err).Warn("启动前同步 Reality 入站配置失败")
+	} else if changed {
+		logger.Info("启动前已根据 config.yaml 同步 Reality 入站配置")
+	}
+
 	// 启动核心。托管模式若启动前同步成功，这里会启动已修正后的配置；
 	// 若同步失败，则继续启动现有配置，避免服务完全不可用。
 	if err := coreMgr.StartAll(); err != nil {
 		logger.WithError(err).Warn("启动核心失败")
+	}
+
+	if cfg.Standalone && subMgr != nil {
+		if err := subMgr.GenerateAll(); err != nil {
+			logger.WithError(err).Warn("启动时重新生成订阅失败")
+		} else {
+			logger.Info("启动时已根据当前配置重新生成订阅")
+		}
 	}
 
 	if syncLoop != nil {

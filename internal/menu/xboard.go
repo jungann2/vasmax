@@ -114,6 +114,7 @@ func (m *XboardMenu) enable() {
 		PrintSuccess("连接测试通过")
 	}
 
+	old := *m.config
 	m.config.Standalone = false
 	m.config.APIHost = apiHost
 	m.config.APIToken = apiToken
@@ -122,6 +123,7 @@ func (m *XboardMenu) enable() {
 	m.config.NodeType = nodeType
 
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		*m.config = old
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}
@@ -134,9 +136,11 @@ func (m *XboardMenu) disable() {
 		return
 	}
 
+	old := *m.config
 	m.config.Standalone = true
 
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		*m.config = old
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}
@@ -163,6 +167,7 @@ func (m *XboardMenu) testConnection() {
 
 func (m *XboardMenu) modifyConfig() {
 	PrintTitle("修改 Xboard-Plus 配置")
+	old := *m.config
 	PrintInfo(fmt.Sprintf("当前面板地址: %s", m.config.APIHost))
 	if m.config.APIPrefix != "" {
 		PrintInfo(fmt.Sprintf("当前 API 前缀: %s", m.config.APIPrefix))
@@ -219,6 +224,7 @@ func (m *XboardMenu) modifyConfig() {
 	}
 
 	if err := config.SaveConfig(config.DefaultConfigPath, m.config); err != nil {
+		*m.config = old
 		PrintError(fmt.Sprintf("保存配置失败: %v", err))
 		return
 	}

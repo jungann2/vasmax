@@ -176,6 +176,86 @@ ALIAS
     green "systemd 服务已配置"
 }
 
+enable_bbr_fq_if_supported() {
+    if [[ "${OS_TYPE}" == "alpine" ]]; then
+        yellow "Alpine 环境跳过自动启用 BBR + FQ"
+        return 0
+    fi
+    if ! command -v sysctl &>/dev/null; then
+        yellow "未找到 sysctl，跳过自动启用 BBR + FQ"
+        return 0
+    fi
+
+    modprobe tcp_bbr 2>/dev/null || true
+    modprobe sch_fq 2>/dev/null || true
+
+    local available_cc
+    available_cc="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+    if ! echo " ${available_cc} " | grep -qw "bbr"; then
+        yellow "当前内核未暴露 bbr 支持，跳过自动启用 BBR + FQ"
+        return 0
+    fi
+
+    cat > /etc/sysctl.d/99-vasmax-bbr.conf << 'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+
+    if ! sysctl -p /etc/sysctl.d/99-vasmax-bbr.conf >/dev/null 2>&1; then
+        yellow "自动应用 BBR + FQ 失败，请安装完成后在 vasmax 菜单中手动检查"
+        return 0
+    fi
+
+    local default_iface=""
+    if command -v ip &>/dev/null; then
+        default_iface="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
+    fi
+    if [[ -n "${default_iface}" && -x "$(command -v tc 2>/dev/null)" ]]; then
+        if ! tc qdisc replace dev "${default_iface}" root fq >/dev/null 2>&1; then
+            yellow "BBR 已写入，但默认网卡 ${default_iface} 的 fq qdisc 即时应用失败；请在 vasmax 健康检查中确认"
+        fi
+    else
+        yellow "无法找到 ip/tc 或默认网卡，BBR+FQ 已写入 sysctl，但当前网卡 qdisc 未确认"
+    fi
+
+    local current_cc
+    local current_qdisc
+    local device_qdisc=""
+    current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+    if [[ -n "${default_iface}" ]] && command -v tc &>/dev/null; then
+        device_qdisc="$(tc qdisc show dev "${default_iface}" 2>/dev/null | awk '/qdisc/{print $2; exit}')"
+    fi
+    if [[ "${current_cc}" == "bbr" && "${current_qdisc}" == "fq" && "${device_qdisc}" == "fq" ]]; then
+        green "已自动启用 BBR + FQ（默认网卡 ${default_iface} 已应用 fq）"
+    elif [[ "${current_cc}" == "bbr" && "${current_qdisc}" == "fq" ]]; then
+        yellow "BBR + FQ sysctl 已启用，但默认网卡 qdisc 为 ${device_qdisc:-unknown}，请在 vasmax 菜单中检查"
+    else
+        yellow "BBR + FQ 配置已写入，但当前状态为 ${current_cc:-unknown} + ${current_qdisc:-unknown}，请在 vasmax 菜单中检查"
+    fi
+}
+
+install_geodata_cron() {
+    if [[ "${OS_TYPE}" == "alpine" ]]; then
+        yellow "Alpine 环境跳过 GeoData 自动更新 cron"
+        return 0
+    fi
+    if [[ ! -x "${INSTALL_PATH}" ]]; then
+        yellow "未找到 ${INSTALL_PATH}，跳过 GeoData 自动更新 cron"
+        return 0
+    fi
+    cat > /etc/cron.d/VasmaX-geodata << 'EOF'
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 4 * * * root /usr/local/bin/VasmaX -c /etc/vasmax/config.yaml --update-geodata >> /var/log/vasmax/geodata-update.log 2>&1
+EOF
+    chmod 644 /etc/cron.d/VasmaX-geodata
+    if command -v systemctl &>/dev/null; then
+        systemctl enable --now cron 2>/dev/null || systemctl enable --now crond 2>/dev/null || true
+    fi
+    green "已安装 GeoData 自动更新任务（每天 04:00）"
+}
+
 # --- 写入默认配置 ---
 write_default_config() {
     cat > "${CONFIG_FILE}" << YAML
@@ -395,6 +475,7 @@ uninstall() {
     rm -f "${SERVICE_FILE}"
     rm -f /usr/local/bin/vasmax
     rm -f "${INSTALLER_PATH}"
+    rm -f /etc/cron.d/VasmaX-geodata
 
     # 清理 BBR/sysctl 配置文件
     rm -f /etc/sysctl.d/99-vasmax-bbr.conf
@@ -480,6 +561,8 @@ do_install() {
     download_binary
     write_config_reference
     setup_service
+    enable_bbr_fq_if_supported
+    install_geodata_cron
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX
     fi
@@ -522,6 +605,7 @@ do_update() {
     fi
     download_binary
     write_config_reference
+    install_geodata_cron
     "${INSTALL_PATH}" --version >/dev/null
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX

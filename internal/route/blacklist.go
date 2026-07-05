@@ -2,6 +2,7 @@ package route
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,10 @@ func (b *BlacklistManager) Add(domains ...string) error {
 	b.mgr.mu.Lock()
 	defer b.mgr.mu.Unlock()
 
+	snapshot, err := b.mgr.snapshotRoutingFiles(b.blacklistFile)
+	if err != nil {
+		return err
+	}
 	current, _ := b.loadBlacklist()
 	existing := make(map[string]bool)
 	for _, d := range current {
@@ -46,7 +51,11 @@ func (b *BlacklistManager) Add(domains ...string) error {
 		return err
 	}
 
-	return b.applyBlacklist(current)
+	if err := b.applyBlacklist(current); err != nil {
+		_ = restoreFileSnapshots(snapshot)
+		return err
+	}
+	return nil
 }
 
 // Remove removes domains from the blacklist.
@@ -54,6 +63,10 @@ func (b *BlacklistManager) Remove(domains ...string) error {
 	b.mgr.mu.Lock()
 	defer b.mgr.mu.Unlock()
 
+	snapshot, err := b.mgr.snapshotRoutingFiles(b.blacklistFile)
+	if err != nil {
+		return err
+	}
 	current, _ := b.loadBlacklist()
 	toRemove := make(map[string]bool)
 	for _, d := range domains {
@@ -72,9 +85,17 @@ func (b *BlacklistManager) Remove(domains ...string) error {
 	}
 
 	if len(filtered) == 0 {
-		return b.removeBlacklistRule()
+		if err := b.removeBlacklistRule(); err != nil {
+			_ = restoreFileSnapshots(snapshot)
+			return err
+		}
+		return nil
 	}
-	return b.applyBlacklist(filtered)
+	if err := b.applyBlacklist(filtered); err != nil {
+		_ = restoreFileSnapshots(snapshot)
+		return err
+	}
+	return nil
 }
 
 // BlockChina adds geosite:cn to the blacklist for one-click China domain blocking.
@@ -117,8 +138,12 @@ func (b *BlacklistManager) applyBlacklist(domains []string) error {
 	}
 
 	// Remove existing blacklist rule first.
-	_ = b.mgr.removeXrayRule("domain_blacklist")
-	_ = b.mgr.removeSingboxRule("domain_blacklist")
+	if err := b.mgr.removeXrayRule("domain_blacklist"); err != nil {
+		return fmt.Errorf("failed to clear xray blacklist: %w", err)
+	}
+	if err := b.mgr.removeSingboxRule("domain_blacklist"); err != nil {
+		return fmt.Errorf("failed to clear singbox blacklist: %w", err)
+	}
 
 	if err := b.mgr.addXrayRule(rule); err != nil {
 		return fmt.Errorf("failed to apply xray blacklist: %w", err)
@@ -127,13 +152,16 @@ func (b *BlacklistManager) applyBlacklist(domains []string) error {
 		return fmt.Errorf("failed to apply singbox blacklist: %w", err)
 	}
 
-	b.mgr.logger.Infof("blacklist updated: %d domains", len(domains))
+	if b.mgr.logger != nil {
+		b.mgr.logger.Infof("blacklist updated: %d domains", len(domains))
+	}
 	return nil
 }
 
 // removeBlacklistRule removes the blacklist routing rule.
 func (b *BlacklistManager) removeBlacklistRule() error {
-	_ = b.mgr.removeXrayRule("domain_blacklist")
-	_ = b.mgr.removeSingboxRule("domain_blacklist")
-	return nil
+	return errors.Join(
+		b.mgr.removeXrayRule("domain_blacklist"),
+		b.mgr.removeSingboxRule("domain_blacklist"),
+	)
 }
