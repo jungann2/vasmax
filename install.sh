@@ -481,6 +481,7 @@ uninstall() {
     rm -f /etc/sysctl.d/99-vasmax-bbr.conf
     rm -f /etc/sysctl.d/99-vasmax-optimize.conf
     rm -f /etc/sysctl.d/99-vasmax-ipv6.conf
+    rm -f /etc/sysctl.d/99-vasmax-conntrack.conf
     sysctl --system &>/dev/null || true
 
     # 检测是否安装了非原装内核
@@ -563,6 +564,12 @@ do_install() {
     setup_service
     enable_bbr_fq_if_supported
     install_geodata_cron
+    # 自动应用系统网络优化（conntrack/keepalive/连接数），失败只 WARN 不阻塞安装
+    if command -v sysctl &>/dev/null; then
+        green "正在应用系统网络优化..."
+        "${INSTALL_PATH}" --apply-optimize 2>/dev/null || \
+            yellow "系统优化应用失败，可稍后在菜单 → 系统工具中手动应用"
+    fi
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX
     fi
@@ -607,6 +614,12 @@ do_update() {
     write_config_reference
     install_geodata_cron
     "${INSTALL_PATH}" --version >/dev/null
+    # 升级也应用最新的系统网络优化参数（conntrack/keepalive 等），失败只 WARN
+    if command -v sysctl &>/dev/null; then
+        green "正在应用系统网络优化..."
+        "${INSTALL_PATH}" --apply-optimize 2>/dev/null || \
+            yellow "系统优化应用失败，可稍后在菜单 → 系统工具中手动应用"
+    fi
     if [[ "${OS_TYPE}" != "alpine" ]]; then
         systemctl start VasmaX
     fi
